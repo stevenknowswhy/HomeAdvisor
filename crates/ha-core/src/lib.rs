@@ -12,10 +12,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod dimension;
 pub mod goal;
+pub mod policy;
 
 pub use dimension::{Dimension, ExternalHandling, Generalizer, Sensitivity};
 pub use goal::{
     Domain, Goal, GoalId, GoalRelationship, GoalStatus, MemberId, RelationshipKind, Timeframe,
+};
+pub use policy::{
+    BlockReason, Decision, Gate, LeakClass, LeakScanner, OutboundContext, PolicyConfig,
+    PolicyError, ResearchPurpose, ScanError, ScanReport,
 };
 
 #[cfg(test)]
