@@ -6,12 +6,22 @@
 //!   flag, confidence, and verification.
 //! - The fail-closed policy router: plain Rust `match` over gate results that
 //!   decides ALLOW / QUARANTINE / BLOCK. The model judges; this code decides.
-//!
-//! This scaffold compiles as a stub so CI enforcement exists from the first
-//! merge; the real types land with their milestone-1 tasks.
 
 /// Crate version, exported for the CLI banner and diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod dimension;
+pub mod goal;
+pub mod policy;
+
+pub use dimension::{Dimension, ExternalHandling, Generalizer, Sensitivity};
+pub use goal::{
+    Domain, Goal, GoalId, GoalRelationship, GoalStatus, MemberId, RelationshipKind, Timeframe,
+};
+pub use policy::{
+    BlockReason, Decision, Gate, LeakClass, LeakScanner, OutboundContext, PolicyConfig,
+    PolicyError, ResearchPurpose, ScanError, ScanReport,
+};
 
 #[cfg(test)]
 mod tests {
