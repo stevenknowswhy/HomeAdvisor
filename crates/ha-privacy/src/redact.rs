@@ -309,7 +309,14 @@ pub fn redact(
     if !draft.is_object() {
         return Err(RedactionError::RootNotAnObject);
     }
-    let payload = walk(draft, &mut Vec::new(), plan, regions, &mut removed, &mut generalized)?;
+    let payload = walk(
+        draft,
+        &mut Vec::new(),
+        plan,
+        regions,
+        &mut removed,
+        &mut generalized,
+    )?;
 
     let context = OutboundContext {
         purpose,
@@ -347,7 +354,9 @@ fn walk(
     let key = segments.last().map(String::as_str).unwrap_or_default();
     if NAME_KEYS.contains(&key) {
         return match policy {
-            Some(FieldPolicy::Allowed { .. }) => Err(RedactionError::NameKeyAllowed { path: pointer }),
+            Some(FieldPolicy::Allowed { .. }) => {
+                Err(RedactionError::NameKeyAllowed { path: pointer })
+            }
             Some(FieldPolicy::Generalize(_)) => {
                 Err(RedactionError::NameKeyGeneralized { path: pointer })
             }
@@ -511,7 +520,9 @@ fn generalize_leaf(
         Generalizer::ToHouseholdSize => {
             let size = whole_number(value, path, generalizer)?;
             if !(1..=40).contains(&size) {
-                return Err(failed(format!("household size {size} is outside any sane range")));
+                return Err(failed(format!(
+                    "household size {size} is outside any sane range"
+                )));
             }
             Ok(Value::String(household_size_band(size)))
         }
@@ -522,7 +533,11 @@ fn band_string(label: &str) -> Value {
     Value::String(label.to_string())
 }
 
-fn whole_number(value: &Value, path: &str, generalizer: Generalizer) -> Result<u64, RedactionError> {
+fn whole_number(
+    value: &Value,
+    path: &str,
+    generalizer: Generalizer,
+) -> Result<u64, RedactionError> {
     match value {
         Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap_or_default()),
         Value::Number(_) => Err(RedactionError::GeneralizationFailed {
@@ -673,10 +688,28 @@ mod tests {
     fn generalizer_rejects_garbage_instead_of_guessing() {
         let regions = regions_with_austin();
         // Age 999 is not "75+": it is a data error and Layer 1 must fail.
-        assert!(generalize_leaf(&Value::from(999u64), Generalizer::ToAgeBand, "/age", &regions).is_err());
+        assert!(generalize_leaf(
+            &Value::from(999u64),
+            Generalizer::ToAgeBand,
+            "/age",
+            &regions
+        )
+        .is_err());
         // Negative and fractional values are not ages.
-        assert!(generalize_leaf(&serde_json::json!(-3), Generalizer::ToAgeBand, "/age", &regions).is_err());
-        assert!(generalize_leaf(&serde_json::json!(8.5), Generalizer::ToAgeBand, "/age", &regions).is_err());
+        assert!(generalize_leaf(
+            &serde_json::json!(-3),
+            Generalizer::ToAgeBand,
+            "/age",
+            &regions
+        )
+        .is_err());
+        assert!(generalize_leaf(
+            &serde_json::json!(8.5),
+            Generalizer::ToAgeBand,
+            "/age",
+            &regions
+        )
+        .is_err());
         // An address the family has not classified locally fails closed.
         let unknown = generalize_leaf(
             &Value::from("99 Unknown Ln"),
@@ -686,7 +719,13 @@ mod tests {
         );
         assert!(unknown.is_err());
         // A non-string where a locality belongs fails.
-        assert!(generalize_leaf(&Value::from(4u64), Generalizer::ToRegion, "/address", &regions).is_err());
+        assert!(generalize_leaf(
+            &Value::from(4u64),
+            Generalizer::ToRegion,
+            "/address",
+            &regions
+        )
+        .is_err());
     }
 
     // ── the allowlist walker ────────────────────────────────────────────────
@@ -707,12 +746,31 @@ mod tests {
 
     fn plan() -> RedactionPlan {
         RedactionPlan::new()
-            .rule("/household/size", FieldPolicy::Allowed { form: AllowedForm::Structured })
-            .rule("/household/income", FieldPolicy::Generalize(Generalizer::ToIncomeBand))
-            .rule("/household/address", FieldPolicy::Generalize(Generalizer::ToRegion))
+            .rule(
+                "/household/size",
+                FieldPolicy::Allowed {
+                    form: AllowedForm::Structured,
+                },
+            )
+            .rule(
+                "/household/income",
+                FieldPolicy::Generalize(Generalizer::ToIncomeBand),
+            )
+            .rule(
+                "/household/address",
+                FieldPolicy::Generalize(Generalizer::ToRegion),
+            )
             .rule("/household/display_name_local", FieldPolicy::NeverExternal)
-            .rule("/children/*/age", FieldPolicy::Generalize(Generalizer::ToAgeBand))
-            .rule("/context", FieldPolicy::Allowed { form: AllowedForm::Verbatim })
+            .rule(
+                "/children/*/age",
+                FieldPolicy::Generalize(Generalizer::ToAgeBand),
+            )
+            .rule(
+                "/context",
+                FieldPolicy::Allowed {
+                    form: AllowedForm::Verbatim,
+                },
+            )
     }
 
     #[test]
@@ -743,8 +801,16 @@ mod tests {
         let output = redact(&draft(), &plan(), &regions_with_austin(), purpose()).unwrap();
         let serialized = output.context.payload.to_string();
 
-        for raw in ["150000", "1234 Oak St, Austin, TX", "The Johnsons", "internal only"] {
-            assert!(!serialized.contains(raw), "raw value {raw} leaked into the payload");
+        for raw in [
+            "150000",
+            "1234 Oak St, Austin, TX",
+            "The Johnsons",
+            "internal only",
+        ] {
+            assert!(
+                !serialized.contains(raw),
+                "raw value {raw} leaked into the payload"
+            );
         }
         // Raw ages/incomes never appear as leaf values (band labels are
         // strings; the raw numbers were ints).
@@ -769,7 +835,9 @@ mod tests {
     fn an_allow_rule_on_a_name_field_is_a_configuration_error() {
         let plan = RedactionPlan::new().rule(
             "/child/display_name_local",
-            FieldPolicy::Allowed { form: AllowedForm::Verbatim },
+            FieldPolicy::Allowed {
+                form: AllowedForm::Verbatim,
+            },
         );
         let draft = serde_json::json!({ "child": { "display_name_local": "Jamie" } });
         let error = redact(&draft, &plan, &regions_with_austin(), purpose()).unwrap_err();
@@ -785,8 +853,10 @@ mod tests {
 
     #[test]
     fn a_name_field_with_no_rule_is_stripped_silently() {
-        let plan = RedactionPlan::new()
-            .rule("/person/age", FieldPolicy::Generalize(Generalizer::ToAgeBand));
+        let plan = RedactionPlan::new().rule(
+            "/person/age",
+            FieldPolicy::Generalize(Generalizer::ToAgeBand),
+        );
         let draft = serde_json::json!({ "person": { "age": 41, "nickname": "Ace" } });
         let output = redact(&draft, &plan, &regions_with_austin(), purpose()).unwrap();
         assert_eq!(output.context.payload["person"]["age"], "35-44");
@@ -797,8 +867,10 @@ mod tests {
     #[test]
     fn unclassifiable_values_fail_layer_1() {
         let draft = serde_json::json!({ "income": "lots" });
-        let plan = RedactionPlan::new()
-            .rule("/income", FieldPolicy::Generalize(Generalizer::ToIncomeBand));
+        let plan = RedactionPlan::new().rule(
+            "/income",
+            FieldPolicy::Generalize(Generalizer::ToIncomeBand),
+        );
         let error = redact(&draft, &plan, &regions_with_austin(), purpose()).unwrap_err();
         assert!(matches!(error, RedactionError::GeneralizationFailed { .. }));
     }
@@ -807,7 +879,13 @@ mod tests {
     fn non_object_drafts_are_rejected() {
         let plan = RedactionPlan::new();
         assert_eq!(
-            redact(&Value::Array(vec![]), &plan, &regions_with_austin(), purpose()).unwrap_err(),
+            redact(
+                &Value::Array(vec![]),
+                &plan,
+                &regions_with_austin(),
+                purpose()
+            )
+            .unwrap_err(),
             RedactionError::RootNotAnObject
         );
     }
@@ -822,8 +900,14 @@ mod tests {
         )
         .build()
         .unwrap();
-        assert_eq!(output.context.purpose, ResearchPurpose::DomainResearch(Domain::Wealth));
-        assert_eq!(output.context.transformation_version, transformation_version());
+        assert_eq!(
+            output.context.purpose,
+            ResearchPurpose::DomainResearch(Domain::Wealth)
+        );
+        assert_eq!(
+            output.context.transformation_version,
+            transformation_version()
+        );
     }
 
     #[test]
@@ -841,8 +925,16 @@ mod tests {
     #[test]
     fn container_rules_inherit_to_leaves_unless_overridden() {
         let plan = RedactionPlan::new()
-            .rule("/prefs", FieldPolicy::Allowed { form: AllowedForm::Structured })
-            .rule("/prefs/budget", FieldPolicy::Generalize(Generalizer::ToIncomeBand));
+            .rule(
+                "/prefs",
+                FieldPolicy::Allowed {
+                    form: AllowedForm::Structured,
+                },
+            )
+            .rule(
+                "/prefs/budget",
+                FieldPolicy::Generalize(Generalizer::ToIncomeBand),
+            );
         let draft = serde_json::json!({ "prefs": { "tone": "gentle", "budget": 60_000 } });
         let output = redact(&draft, &plan, &regions_with_austin(), purpose()).unwrap();
         assert_eq!(output.context.payload["prefs"]["tone"], "gentle");
