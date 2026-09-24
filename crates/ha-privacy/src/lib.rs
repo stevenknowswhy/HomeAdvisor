@@ -7,8 +7,8 @@
 //!    stripped, ages → bands, exact location → region, income → band.
 //!    Primary and provable.
 //! 2. A semantic leak-scan of the transformed payload, run by a local Laya
-//!    sidecar over loopback HTTP ([`MockScanner`] is the fixture form) — a
-//!    recall net, never the decider.
+//!    sidecar over loopback HTTP — [`LayaSidecar`] is the real client,
+//!    [`MockScanner`] the fixture form — a recall net, never the decider.
 //! 3. The fail-closed router in `ha-core`, wired here in [`run`]: clean scan
 //!    with adequate confidence → ALLOW; anything flagged, uncertain, or
 //!    unreachable → QUARANTINE (one re-generalization pass) or BLOCK. The
@@ -22,6 +22,7 @@
 //! research code never holds a socket.
 
 mod egress;
+mod laya;
 mod pipeline;
 mod redact;
 mod scan;
@@ -30,6 +31,7 @@ pub use egress::{
     block_reason_text, decision_code, list_receipts, payload_hash, record_receipt, EgressReceipt,
     PrivacyError, RecordedReceipt,
 };
+pub use laya::{LayaConfigError, LayaSidecar, DEFAULT_CHECKPOINT};
 pub use pipeline::{purpose_code, run, GateOutcome, GateVerdict, ScanOutcome};
 pub use redact::{
     age_band_label, household_size_band, income_band_label, redact, transformation_version,

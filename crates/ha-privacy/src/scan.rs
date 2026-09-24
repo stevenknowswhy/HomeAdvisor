@@ -1,12 +1,12 @@
 //! Layer 2, fixture form: a canned [`LeakScanner`] for tests and the CLI
 //! demo.
 //!
-//! The real Laya sidecar client — loopback HTTP against the `/predict`
-//! contract, model version reported in receipts — is the next task. This
-//! mock implements the same [`ha_core::LeakScanner`] trait so everything
-//! downstream (the gate, the pipeline, the receipts) is built against the
-//! trait, not the client. It records every payload it is shown so tests can
-//! assert the sidecar only ever sees Layer 1 output.
+//! The real Laya sidecar client lives in [`crate::laya`] — loopback HTTP
+//! against the `/predict` contract, model version reported in receipts.
+//! This mock implements the same [`ha_core::LeakScanner`] trait so
+//! everything downstream (the gate, the pipeline, the receipts) is built
+//! against the trait, not the client. It records every payload it is shown
+//! so tests can assert the sidecar only ever sees Layer 1 output.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
