@@ -5,8 +5,18 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[lib]
+name = "ha_cli"
+
 [dependencies]
 ha-core = { path = "../ha-core" }
+ha-store = { path = "../ha-store" }
+ha-privacy = { path = "../ha-privacy" }
+# The demo reads the seeded profile with raw SQL through `Store::conn()` —
+# the sanctioned escape hatch for the CLI demo (see `ha-store::Store::conn`).
+rusqlite = "0.40"
+serde_json = "1"
+thiserror = "2"
 
 [lints]
 workspace = true
