@@ -5,5 +5,15 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[dependencies]
+ha-core = { path = "../ha-core" }
+ha-store = { path = "../ha-store" }
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+rusqlite = "0.40"
+
 [lints]
 workspace = true
