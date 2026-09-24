@@ -133,6 +133,11 @@ name = "ha-cli"
 version = "0.1.0"
 dependencies = [
  "ha-core",
+ "ha-privacy",
+ "ha-store",
+ "rusqlite",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

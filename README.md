@@ -29,8 +29,14 @@ those are later milestones that build on this gate, not alongside it.
 | `ha-privacy` | The gate: deterministic redaction, semantic leak-scan, fail-closed vetting |
 | `ha-cli`     | Demo surface: seeds a family, exercises the gate, prints the receipt |
 
-The crates compile as scaffolding stubs today; milestone-1 tasks fill in types,
-schema, and the gate.
+The milestone-1 pieces are in place. `ha-cli` demonstrates the full round
+trip — see [the CLI walkthrough](docs/cli-round-trip.md):
+
+```sh
+HA_STORE_KEY=<passphrase> cargo run -p ha-cli -- seed     --db demo.db
+HA_STORE_KEY=<passphrase> cargo run -p ha-cli -- research --db demo.db --sidecar http://127.0.0.1:8000
+HA_STORE_KEY=<passphrase> cargo run -p ha-cli -- receipt  --db demo.db
+```
 
 ## Development
 
