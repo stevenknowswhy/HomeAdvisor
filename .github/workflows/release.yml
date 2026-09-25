@@ -1,0 +1,57 @@
+name: Release
+
+# Publishes a GitHub Release with the macOS .dmg when a v* tag is pushed.
+# workflow_dispatch builds without publishing (no tag ref to attach to).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-macos:
+    name: Build & publish macOS release
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install
+        working-directory: app
+      # Same build as CI's tauri-build-macos job; on macOS the bundle targets
+      # resolve to the .dmg and .app bundle (see app/src-tauri/tauri.conf.json).
+      - name: Build installers
+        run: pnpm tauri build
+        working-directory: app
+      # Tag builds only: a manual dispatch on a branch ref has no version to
+      # release, so it verifies the build without cutting a Release.
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          # Bundles land in the workspace-root target dir, not under app/.
+          files: target/release/bundle/dmg/*.dmg
+          fail_on_unmatched_files: true
+          body: |
+            Home Advisor is a local-first, privacy-gated family advisor: a private, on-device family profile becomes a few sharp, evidence-backed actions a day across health, wealth, education, career, lifestyle, and family happiness — for adults and children. Family data lives in an SQLCipher-encrypted database on your machine, and the app never sends your PII anywhere — every outbound byte is gated, redacted, and receipted ([threat model](https://github.com/stevenknowswhy/HomeAdvisor/blob/main/docs/threat-model.md)).
+
+            ### Install on macOS (Apple Silicon)
+
+            1. Download `HomeAdvisor_<version>_aarch64.dmg` from the assets below (for v0.1.0: `HomeAdvisor_0.1.0_aarch64.dmg`).
+            2. Open the image and drag Home Advisor to **Applications**.
+            3. First launch: right-click Home Advisor in `/Applications` and choose **Open**, then confirm **Open**. Needed once — the app is unsigned (no Apple Developer certificate yet), so Gatekeeper asks for confirmation.
+            4. If macOS still refuses to open the app, run `xattr -cr /Applications/HomeAdvisor.app` in Terminal and open it again.
