@@ -50,6 +50,8 @@ describe("ReceiptRow", () => {
     render(ReceiptRow, {
       props: props({
         decision: "BLOCK",
+        layer1Verdict: "passed",
+        scanSummary: "no scan ran",
         reason: "sidecar unavailable — fail closed",
       }),
     });
@@ -58,7 +60,34 @@ describe("ReceiptRow", () => {
     const withoutReason = render(ReceiptRow, { props: props() });
     const rows = screen.getAllByTestId("receipt-row");
     const last = rows[rows.length - 1] as HTMLElement;
-    expect(within(last).getByText("—")).toBeTruthy();
+    // Absent optional cells render their own dash; count them precisely.
+    expect(within(last).getAllByText("—").length).toBe(3);
     withoutReason.unmount();
+  });
+
+  it("renders the layer-1 and scan verdict cells", () => {
+    const { container } = render(ReceiptRow, {
+      props: props({
+        layer1Verdict: "passed, 1 removed, 1 generalized",
+        scanSummary: "confidence 92%, top signal FullName 2%",
+        scanDetail: "laya-mini-2026-06",
+      }),
+    });
+    const row = container.querySelector("tr") as HTMLElement;
+
+    expect(
+      within(row).getByText("passed, 1 removed, 1 generalized"),
+    ).toBeTruthy();
+    expect(
+      within(row).getByText("confidence 92%, top signal FullName 2%"),
+    ).toBeTruthy();
+    // The checker model is visible as receipt provenance.
+    expect(within(row).getByText("laya-mini-2026-06")).toBeTruthy();
+  });
+
+  it("leaves verdict cells dashed when no verdict text was parsed", () => {
+    const { container } = render(ReceiptRow, { props: props() });
+    const row = container.querySelector("tr") as HTMLElement;
+    expect(within(row).getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -1,11 +1,11 @@
 <script lang="ts">
   import BandPicker from "./lib/BandPicker.svelte";
-  import ReceiptRow from "./lib/ReceiptRow.svelte";
+  import DailyView from "./lib/DailyView.svelte";
+  import ReceiptsScreen from "./lib/ReceiptsScreen.svelte";
 
-  // Demo data, shaped like the real thing: band options come from the seeded
-  // v1 taxonomy (migration 002 in ha-store), region classes from the household
-  // CHECK, and receipts from the egress_log columns. Nothing here calls the
-  // backend — IPC reads land in a later slice.
+  // Demo band options, shaped like the real thing: they come from the seeded
+  // v1 taxonomy (migration 002 in ha-store) and the household region CHECK.
+  // Onboarding replaces this demo profile section with real views.
   const childAgeOptions = [
     { value: "age_0_2", label: "0-2" },
     { value: "age_3_5", label: "3-5" },
@@ -37,33 +37,6 @@
     { value: "small_town", label: "Small town" },
   ];
 
-  const receipts = [
-    {
-      purpose: "domain research — wealth",
-      decision: "ALLOW",
-      payloadHash:
-        "9f2c7a1e5b8d4f3a6c0e2d4b6a8c0e2d4b6a8c0e2d4b6a8c0e2d4b6a8c0e2d4b",
-      createdAt: "2026-09-24 09:14:02Z",
-      reason: undefined,
-    },
-    {
-      purpose: "domain research — education",
-      decision: "QUARANTINE",
-      payloadHash:
-        "4c8b1d0f7a3e9c5b1f8d2a6e0c4b8f2d6a0c4b8f2d6a0e4c8b1d0f7a3e9c5b1f8d",
-      createdAt: "2026-09-24 11:40:17Z",
-      reason: "leak class above threshold: unique combination",
-    },
-    {
-      purpose: "domain research — health",
-      decision: "BLOCK",
-      payloadHash:
-        "2e6a0c4b8f2d6a0e4c8b1d0f7a3e9c5b1f8d2a6e0c4b8f2d6a0e4c8b1d0f7a3e",
-      createdAt: "2026-09-24 18:22:55Z",
-      reason: "sidecar unavailable — fail closed",
-    },
-  ];
-
   let childAgeBand = $state<string | null>(null);
   let adultAgeBand = $state<string | null>("age_35_44");
   let incomeBand = $state<string | null>(null);
@@ -85,10 +58,12 @@
       Nothing leaves this machine without passing the privacy gate.
     </p>
     <p class="scaffold-note">
-      Scaffold preview — static demo data; Tauri IPC reads arrive in the next
-      slice.
+      The Today view and the privacy receipts below read your encrypted store
+      directly. Nothing in this window leaves your machine.
     </p>
   </header>
+
+  <DailyView />
 
   <section aria-labelledby="profile-heading">
     <h2 id="profile-heading">Household profile (demo)</h2>
@@ -134,36 +109,7 @@
     </p>
   </section>
 
-  <section aria-labelledby="receipts-heading">
-    <h2 id="receipts-heading">Privacy receipts (demo)</h2>
-    <p class="section-hint">
-      Every outbound attempt leaves a receipt in the append-only egress log —
-      payload hash, scan verdict, and the gate's decision.
-    </p>
-    <table>
-      <caption class="visually-hidden">Egress log receipts</caption>
-      <thead>
-        <tr>
-          <th scope="col">Purpose</th>
-          <th scope="col">Decision</th>
-          <th scope="col">Payload hash</th>
-          <th scope="col">Recorded</th>
-          <th scope="col">Reason</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each receipts as receipt (receipt.payloadHash)}
-          <ReceiptRow
-            purpose={receipt.purpose}
-            decision={receipt.decision}
-            payloadHash={receipt.payloadHash}
-            createdAt={receipt.createdAt}
-            reason={receipt.reason}
-          />
-        {/each}
-      </tbody>
-    </table>
-  </section>
+  <ReceiptsScreen />
 </main>
 
 <style>
@@ -243,27 +189,5 @@
     margin: 0.75rem 0 0;
     font-size: 0.9rem;
     color: var(--muted);
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.9rem;
-  }
-
-  th {
-    text-align: left;
-    padding: 0.4rem 0.75rem;
-    color: var(--muted);
-    font-weight: 600;
-  }
-
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
   }
 </style>
