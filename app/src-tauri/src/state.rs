@@ -4,8 +4,9 @@
 //! `AppState` is the only object the IPC commands touch. It owns the
 //! encrypted store (spec, milestone 2: "the Rust core keeps sole ownership
 //! of the store, the gate, and the sidecar; the frontend renders state,
-//! never data access") and the loopback scan client. Nothing here is
-//! serializable or clonable into the webview on purpose.
+//! never data access"), the loopback scan client, and the sidecar
+//! supervisor. Nothing here is serializable or clonable into the webview
+//! on purpose.
 
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
@@ -17,6 +18,10 @@ use ha_store::Store;
 use tauri::Manager as _;
 
 use crate::commands::AppError;
+use crate::supervisor::{
+    CommandSpawner, ExternalSidecar, HealthProbe, SidecarSpawner, SidecarSupervisor,
+    SupervisionPolicy, TcpProbe, HEALTH_CHECK_INTERVAL,
+};
 
 /// How long the privacy-status probe waits for the sidecar to accept a
 /// connection before declaring it unavailable. Bounded and short: the probe
@@ -33,17 +38,23 @@ pub struct AppState {
     /// which is all a single-user desktop app needs.
     store: Mutex<Store>,
     /// The Layer 2 scan client. The constructor rejects non-loopback URLs,
-    /// so this handle can only ever point at this machine. Sidecar
-    /// supervision (spawn, health-check, restart) lands with its own slice;
-    /// for now the state carries the client and answers reachability.
+    /// so this handle can only ever point at this machine.
     sidecar: LayaSidecar,
+    /// The sidecar supervisor (spawn, health-check, restart) — the machine
+    /// behind `privacy_status` and the gated egress pre-flight.
+    supervisor: SidecarSupervisor,
 }
 
 impl AppState {
-    pub fn new(store: Store, sidecar: LayaSidecar) -> Self {
+    /// Build the app state and begin supervising the sidecar. The
+    /// supervisor's own first tick decides between `Healthy` and
+    /// `Degraded` — either way the status is honest from the first read.
+    pub fn new(store: Store, sidecar: LayaSidecar, supervisor: SidecarSupervisor) -> Self {
+        supervisor.start();
         Self {
             store: Mutex::new(store),
             sidecar,
+            supervisor,
         }
     }
 
@@ -57,10 +68,31 @@ impl AppState {
     pub(crate) fn sidecar(&self) -> &LayaSidecar {
         &self.sidecar
     }
+
+    pub(crate) fn supervisor(&self) -> &SidecarSupervisor {
+        &self.supervisor
+    }
+
+    /// Kill any supervised sidecar. The app calls this on exit: a closed
+    /// window must not orphan the child process it spawned.
+    pub(crate) fn shutdown(&self) {
+        self.supervisor.stop();
+    }
 }
 
 /// Open the state the running app needs: the store from the configured
-/// location, the scan client from the configured loopback endpoint.
+/// location, the scan client from the configured loopback endpoint, and the
+/// sidecar supervisor.
+///
+/// Sidecar configuration:
+///
+/// - `HOMEADVISOR_SIDECAR_URL` — the loopback endpoint the scan client and
+///   the health probe target (default: [`DEFAULT_SIDECAR_URL`]).
+/// - `HOMEADVISOR_SIDECAR_COMMAND` — when set, the app spawns that command
+///   as the sidecar and restarts it when it dies or stops answering
+///   (supervised mode). When unset, the sidecar is managed outside the app
+///   (external mode): the supervisor probes and reports but cannot respawn.
+///   Either way, fail-closed is the contract.
 ///
 /// Fail-closed at startup: without a database key the app cannot serve
 /// reads, so setup aborts with a diagnostic instead of opening a plaintext
@@ -84,7 +116,24 @@ pub fn open_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error
         .unwrap_or_else(|_| DEFAULT_SIDECAR_URL.to_string());
     let sidecar = LayaSidecar::new(&sidecar_url)?;
 
-    Ok(AppState::new(store, sidecar))
+    let spawner: Box<dyn SidecarSpawner> = match std::env::var("HOMEADVISOR_SIDECAR_COMMAND") {
+        Ok(command) if !command.trim().is_empty() => {
+            let argv = shell_words::split(&command)
+                .map_err(|error| format!("could not parse HOMEADVISOR_SIDECAR_COMMAND: {error}"))?;
+            Box::new(CommandSpawner::new(argv))
+        }
+        _ => Box::new(ExternalSidecar),
+    };
+    let probe: Box<dyn HealthProbe> = Box::new(TcpProbe::new(&sidecar_url, SIDECAR_PROBE_TIMEOUT));
+    let supervisor = SidecarSupervisor::with_policy(probe, spawner, SupervisionPolicy::default());
+
+    let state = AppState::new(store, sidecar, supervisor);
+    // The background loop keeps restarts happening without a status read
+    // asking for one; the supervisor supersedes any earlier loop.
+    state
+        .supervisor()
+        .start_health_loop(HEALTH_CHECK_INTERVAL)?;
+    Ok(state)
 }
 
 /// Is the sidecar reachable right now?

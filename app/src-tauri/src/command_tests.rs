@@ -3,6 +3,8 @@
 //! tests, plus one temp-file store to prove the file path the running app
 //! actually uses.
 
+use std::time::Duration;
+
 use ha_privacy::LayaSidecar;
 use ha_store::{Store, StoreKey};
 use rusqlite::Connection;
@@ -11,20 +13,43 @@ use crate::commands::{
     daily_recommendations_core, egress_receipts_core, privacy_status_core, PrivacyStatus,
 };
 use crate::state::AppState;
+use crate::supervisor::{ExternalSidecar, SidecarSupervisor, SupervisionPolicy, TcpProbe};
 
 fn test_key() -> StoreKey {
     StoreKey::from_passphrase("test-key").unwrap()
 }
 
-/// A loopback client pointed at a port nothing listens on: the daily and
-/// receipt reads never touch the sidecar, and this keeps that property
-/// honest — if a read started probing, the test would slow down and fail.
+/// A loopback endpoint nothing listens on: the daily and receipt reads never
+/// touch the sidecar, and this keeps that property honest — if a read started
+/// probing, the test would slow down and fail.
+fn dead_sidecar_url() -> &'static str {
+    "http://127.0.0.1:9"
+}
+
 fn dead_sidecar() -> LayaSidecar {
-    LayaSidecar::new("http://127.0.0.1:9").unwrap()
+    LayaSidecar::new(dead_sidecar_url()).unwrap()
+}
+
+/// A supervisor in external mode (nothing to spawn) probing the given
+/// endpoint — the same shape `open_state` builds when no sidecar command is
+/// configured, with test-speed timings.
+fn external_supervisor_at(url: &str) -> SidecarSupervisor {
+    SidecarSupervisor::with_policy(
+        Box::new(TcpProbe::new(url, Duration::from_millis(250))),
+        Box::new(ExternalSidecar),
+        SupervisionPolicy {
+            start_timeout: Duration::from_secs(30),
+            restart_after_failures: 2,
+        },
+    )
 }
 
 fn test_app() -> AppState {
-    AppState::new(Store::open_in_memory(&test_key()).unwrap(), dead_sidecar())
+    AppState::new(
+        Store::open_in_memory(&test_key()).unwrap(),
+        dead_sidecar(),
+        external_supervisor_at(dead_sidecar_url()),
+    )
 }
 
 fn seed_household(conn: &Connection) {
@@ -172,7 +197,11 @@ fn the_daily_view_reads_a_temp_encrypted_file_store() {
         insert_recommendation(conn, "rec-1", "served", "2026-09-25T08:00:00.000Z");
     }
 
-    let app = AppState::new(Store::open(&db, &key).unwrap(), dead_sidecar());
+    let app = AppState::new(
+        Store::open(&db, &key).unwrap(),
+        dead_sidecar(),
+        external_supervisor_at(dead_sidecar_url()),
+    );
     let served = daily_recommendations_core(&app).unwrap();
 
     assert_eq!(served.len(), 1);
@@ -253,7 +282,7 @@ fn the_receipts_screen_is_empty_on_an_empty_store() {
 #[test]
 fn privacy_status_reports_sidecar_unavailable_and_stays_fail_closed() {
     let app = test_app();
-    match privacy_status_core(app.sidecar()) {
+    match privacy_status_core(app.supervisor(), app.sidecar().checkpoint()) {
         PrivacyStatus::SidecarUnavailable { detail } => {
             assert!(
                 detail.contains("not listening"),
@@ -269,8 +298,11 @@ fn privacy_status_reports_protected_when_the_sidecar_listens() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let sidecar = LayaSidecar::new(&base_url).unwrap();
+    let supervisor = external_supervisor_at(&base_url);
+    // External mode: start probes the endpoint and lands on Healthy.
+    supervisor.start();
 
-    match privacy_status_core(&sidecar) {
+    match privacy_status_core(&supervisor, sidecar.checkpoint()) {
         PrivacyStatus::Protected { checkpoint } => {
             assert_eq!(checkpoint, "convaiinnovations/laya");
         }

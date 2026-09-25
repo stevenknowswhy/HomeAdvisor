@@ -8,8 +8,12 @@
 //!
 //! - [`commands`] — the IPC surface: the read commands, their views, and
 //!   the single-sourced registration the surface audit pins.
-//! - [`state`] — the managed `AppState`: the encrypted store handle and the
-//!   loopback scan client.
+//! - [`state`] — the managed `AppState`: the encrypted store handle, the
+//!   loopback scan client, and the sidecar supervisor.
+//! - [`supervisor`] — the sidecar lifecycle machine: spawn, health-check,
+//!   restart; `privacy_status` and the egress pre-flight both read it.
+//! - [`egress`] — the app's one gated egress path: supervision pre-flight,
+//!   then the `ha-privacy` pipeline; fail-closed by construction.
 //! - [`audit`] — the IPC surface audit: no command accepts raw SQL, file
 //!   paths, or network targets from the webview.
 
@@ -20,7 +24,9 @@ use tauri::Manager as _;
 #[cfg(test)]
 mod audit;
 mod commands;
+mod egress;
 mod state;
+mod supervisor;
 
 #[cfg(test)]
 mod command_tests;
@@ -39,6 +45,16 @@ pub fn run() {
             app.manage(state::open_state(app.handle())?);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run the Home Advisor application");
+        .build(tauri::generate_context!())
+        .expect("failed to build the Home Advisor application")
+        .run(|app_handle, event| {
+            // Kill the supervised sidecar on exit: a closed window must not
+            // orphan the child process the app spawned. This is process
+            // cleanup, not fail-closure — the sidecar is our own child.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app_handle.try_state::<state::AppState>() {
+                    state.shutdown();
+                }
+            }
+        });
 }
