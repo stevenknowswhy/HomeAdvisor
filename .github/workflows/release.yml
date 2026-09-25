@@ -19,6 +19,18 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      # Fail in seconds when the tag and the app version disagree; otherwise a
+      # v0.1.1 tag builds for five minutes and publishes a DMG stamped with the
+      # stale conf version (this shipped as HomeAdvisor_0.1.0_aarch64.dmg).
+      - name: Verify tag matches app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          expected="${GITHUB_REF_NAME#v}"
+          actual="$(jq -r .version app/src-tauri/tauri.conf.json)"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::Tag v${expected} does not match app/src-tauri/tauri.conf.json version ${actual}. Bump the version in app/src-tauri/tauri.conf.json (and the README asset URLs), commit, delete the tag, and re-tag."
+            exit 1
+          fi
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
