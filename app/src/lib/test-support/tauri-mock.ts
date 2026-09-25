@@ -69,8 +69,13 @@ const receipts: ReceiptView[] = [
   {
     id: "eg-1",
     purpose: "domain research — wealth",
+    payloadJson: JSON.stringify({
+      url: "https://example.com/research/wealth",
+      query: "college savings strategies",
+    }),
     decision: "ALLOW",
     payloadHash: "9f2c7a1e5b8d4f3a6c0e2d4b6a8c0e2d4b6a8c0e",
+    transformationVersion: "layer1-2026-06",
     createdAt: "2026-09-25 09:14:02Z",
     layer1Verdict: JSON.stringify({
       status: "passed",
@@ -92,8 +97,13 @@ const receipts: ReceiptView[] = [
   {
     id: "eg-2",
     purpose: "domain research — education",
+    payloadJson: JSON.stringify({
+      url: "https://example.com/research/education",
+      query: "swim lessons for children",
+    }),
     decision: "QUARANTINE",
     payloadHash: "4c8b1d0f7a3e9c5b1f8d2a6e0c4b8f2d6a0c4b8f",
+    transformationVersion: "layer1-2026-06",
     createdAt: "2026-09-25 11:40:17Z",
     layer1Verdict: JSON.stringify({
       status: "passed",
@@ -112,8 +122,13 @@ const receipts: ReceiptView[] = [
   {
     id: "eg-3",
     purpose: "domain research — health",
+    payloadJson: JSON.stringify({
+      url: "https://example.com/research/health",
+      query: "toddler sleep schedule",
+    }),
     decision: "BLOCK",
     payloadHash: "2e6a0c4b8f2d6a0e4c8b1d0f7a3e9c5b1f8d2a6e",
+    transformationVersion: "layer1-2026-06",
     createdAt: "2026-09-25 18:22:55Z",
     layer1Verdict: JSON.stringify({
       status: "passed",
