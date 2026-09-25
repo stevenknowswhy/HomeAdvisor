@@ -14,6 +14,14 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+ha-store = { path = "../../crates/ha-store" }
+ha-privacy = { path = "../../crates/ha-privacy" }
+# The commands read the seeded schema with raw SQL through `Store::conn()` —
+# the sanctioned escape hatch for the app backend, as for the CLI demo
+# (see `ha_store::Store::conn`).
+rusqlite = "0.40"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
 
 [lints]
 workspace = true

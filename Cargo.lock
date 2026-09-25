@@ -1212,8 +1212,13 @@ dependencies = [
 name = "ha-app"
 version = "0.1.0"
 dependencies = [
+ "ha-privacy",
+ "ha-store",
+ "rusqlite",
+ "serde",
  "tauri",
  "tauri-build",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
