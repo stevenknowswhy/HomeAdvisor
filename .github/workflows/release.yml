@@ -63,7 +63,7 @@ jobs:
 
             ### Install on macOS (Apple Silicon)
 
-            1. Download `HomeAdvisor_<version>_aarch64.dmg` from the assets below (for v0.1.0: `HomeAdvisor_0.1.0_aarch64.dmg`).
+            1. Download `HomeAdvisor_<version>_aarch64.dmg` from the assets below (for vX.Y.Z: `HomeAdvisor_X.Y.Z_aarch64.dmg`).
             2. Open the image and drag Home Advisor to **Applications**.
             3. First launch: right-click Home Advisor in `/Applications` and choose **Open**, then confirm **Open**. Needed once — the app is unsigned (no Apple Developer certificate yet), so Gatekeeper asks for confirmation.
             4. If macOS still refuses to open the app, run `xattr -cr /Applications/HomeAdvisor.app` in Terminal and open it again.

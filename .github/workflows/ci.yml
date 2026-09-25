@@ -73,6 +73,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install
         working-directory: app
+      # Same gate as the component tests: `tsc --noEmit` is the typecheck
+      # half of the frontend job, so fixture regressions fail CI before
+      # vitest even runs.
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+        working-directory: app
       - name: Component tests
         run: pnpm test
         working-directory: app

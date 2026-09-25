@@ -23,8 +23,13 @@ function receipt(overrides: Partial<ReceiptView> = {}): ReceiptView {
   return {
     id: "eg-1",
     purpose: "domain research — wealth",
+    payloadJson: JSON.stringify({
+      url: "https://example.com/research/wealth",
+      query: "college savings strategies",
+    }),
     decision: "ALLOW",
     payloadHash: "9f2c7a1e5b8d4f3a6c0e2d4b6a8c0e2d4b6a8c0e",
+    transformationVersion: "layer1-2026-06",
     createdAt: "2026-09-25 09:14:02Z",
     layer1Verdict: JSON.stringify({
       status: "passed",
