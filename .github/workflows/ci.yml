@@ -113,3 +113,38 @@ jobs:
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm
           if-no-files-found: error
+
+  # macOS Apple Silicon build path. The Linux prerequisite apt step is absent
+  # on purpose: macOS links the Tauri frameworks natively, and SQLCipher
+  # compiles against the vendored OpenSSL (crates/ha-store:
+  # bundled-sqlcipher-vendored-openssl), so nothing looks for a system libssl.
+  tauri-build-macos:
+    name: Tauri build & installer artifact (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install
+        working-directory: app
+      - name: Build installers
+        run: pnpm tauri build
+        working-directory: app
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: homeadvisor-installers-macos
+          # Bundles land in the workspace-root target dir, not under app/.
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app.tar.gz
+          if-no-files-found: error
