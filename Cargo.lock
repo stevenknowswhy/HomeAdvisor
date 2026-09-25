@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "ha-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom 0.3.4",
  "ha-core",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "ha-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
