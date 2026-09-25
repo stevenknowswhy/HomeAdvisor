@@ -572,3 +572,158 @@ fn audit_event_is_append_only() {
     let delete = conn.execute("DELETE FROM audit_event WHERE id = 'a_1'", []);
     assert!(delete.is_err(), "audit_event must reject DELETE");
 }
+
+// ─────────────── indexes behind the receipts and daily queries ──────────────
+//
+// Migration 003 backs the two hot read paths — the receipts screen's
+// newest-first walk over the append-only egress log and the daily view's
+// served set — with indexes. These tests pin that the indexes exist after
+// migrate and that the planner actually chooses them.
+
+#[test]
+fn migrations_create_the_query_indexes() {
+    let mut store = test_store();
+    let conn = store.conn();
+
+    for name in ["idx_egress_created", "idx_recommendation_served"] {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .expect("index query prepares");
+        assert_eq!(count, 1, "{name} must exist exactly once after migrate");
+    }
+
+    // The planner must reach the indexes, not fall back to a scan + sort.
+    for (query, index) in [
+        (
+            "SELECT id FROM egress_log ORDER BY created_at DESC, id ASC",
+            "idx_egress_created",
+        ),
+        (
+            "SELECT id FROM recommendation WHERE status = 'served'
+             ORDER BY created_at DESC, id ASC",
+            "idx_recommendation_served",
+        ),
+    ] {
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+            .expect("explain prepares");
+        let plan: Vec<String> = statement
+            .query_map([], |row| row.get(3))
+            .expect("explain runs")
+            .collect::<Result<_, _>>()
+            .expect("explain rows");
+        assert!(
+            plan.iter().any(|detail| detail.contains(index)),
+            "the planner should use {index} for: {query} — plan: {plan:?}"
+        );
+    }
+}
+
+/// The receipts screen's keyset walk, at the store level: the exact query
+/// shape `egress_receipts_core` runs (commands.rs), paged to exhaustion.
+/// 450 rows — two full pages, one terminal page — with a shared timestamp
+/// for every tenth-and-eleventh row, so the (created_at, id) tiebreaker is
+/// exercised, not just distinct timestamps.
+#[test]
+fn keyset_pagination_walks_the_egress_log_without_overlap_or_gaps() {
+    const PAGE_SIZE: i64 = 200;
+    const TOTAL: i64 = 450;
+
+    let mut store = test_store();
+    let conn = store.conn();
+
+    // Fixed-width UTC ISO text, mirroring strftime('%Y-%m-%dT%H:%M:%fZ'):
+    // lexicographic order is chronological order.
+    fn iso_timestamp(hour: i64, minute: i64, second: i64, ms: i64) -> String {
+        format!("2026-09-25T{hour:02}:{minute:02}:{second:02}.{ms:03}Z")
+    }
+
+    let insert_egress_row = |conn: &rusqlite::Connection, index: i64| {
+        // Descending timestamps by insertion order; every tenth row shares
+        // the previous row's millisecond, like two egress attempts landing
+        // in the same instant (the walk must still order and cover them).
+        let step = TOTAL - index + if index % 10 == 9 { 1 } else { 0 };
+        let ms_total = step;
+        let created_at =
+            iso_timestamp(ms_total / 3_600_000, (ms_total / 60) % 60, ms_total % 60, 0);
+        conn.execute(
+            "INSERT INTO egress_log (id, purpose, payload_json, payload_hash,
+                                     transformation_version, layer1_verdict, decision, created_at)
+             VALUES (?1, 'walk_test', '{}', ?1, '1.0.0', 'clean', 'ALLOW', ?2)",
+            rusqlite::params![format!("e_{index:04}"), created_at],
+        )
+        .expect("egress row inserts");
+    };
+
+    for index in 0..TOTAL {
+        insert_egress_row(conn, index);
+    }
+
+    // The walk: the same (created_at, id) keyset the receipts command runs
+    // (id compared UP — the sort breaks timestamp ties by id ASCENDING, so
+    // the rows still to be served in a tie group carry larger ids).
+    const WALK_SQL: &str = "
+        SELECT id FROM egress_log
+        WHERE (?1 IS NULL OR created_at < ?1 OR (created_at = ?1 AND id > ?2))
+        ORDER BY created_at DESC, id ASC
+        LIMIT ?3";
+    let mut statement = conn
+        .prepare(WALK_SQL)
+        .expect("the keyset walk query prepares");
+
+    let mut walked: Vec<String> = Vec::new();
+    let mut page_lengths: Vec<usize> = Vec::new();
+    let mut cursor: Option<(String, String)> = None;
+    loop {
+        let (before_created_at, before_id): (Option<String>, Option<String>) = match &cursor {
+            None => (None, None),
+            Some((created_at, id)) => (Some(created_at.clone()), Some(id.clone())),
+        };
+        let page = statement
+            .query_map(
+                rusqlite::params![before_created_at, before_id, PAGE_SIZE],
+                |row| row.get(0),
+            )
+            .expect("page query runs")
+            .collect::<Result<Vec<String>, _>>()
+            .expect("page rows");
+        let page_length = page.len();
+        walked.extend(page);
+        page_lengths.push(page_length);
+        if page_length < PAGE_SIZE as usize {
+            break;
+        }
+        let last = walked.last().expect("a full page is never empty");
+        cursor = Some((
+            // The timestamp of the last row of the page — re-read it rather
+            // than threading it through the id-only closure above.
+            conn.query_row(
+                "SELECT created_at FROM egress_log WHERE id = ?1",
+                [last],
+                |row| row.get(0),
+            )
+            .expect("last row exists"),
+            last.clone(),
+        ));
+    }
+
+    // No overlap, no gaps: the concatenation of pages is exactly the full
+    // newest-first order, and every page honors the bound.
+    let expected: Vec<String> = conn
+        .prepare("SELECT id FROM egress_log ORDER BY created_at DESC, id ASC")
+        .expect("full-order query prepares")
+        .query_map([], |row| row.get(0))
+        .expect("full-order query runs")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("full-order rows");
+    assert_eq!(walked, expected, "the walk must cover every row once");
+    assert_eq!(
+        page_lengths,
+        vec![PAGE_SIZE as usize, PAGE_SIZE as usize, 50],
+        "two full pages, then the terminal page"
+    );
+}

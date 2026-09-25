@@ -12,7 +12,7 @@
 //! audit (`audit.rs`) asserts against, so the audited surface and the
 //! registered surface cannot drift apart.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::onboarding::{
@@ -85,6 +85,23 @@ pub struct ReceiptView {
     pub created_at: String,
 }
 
+/// What the webview may ask for when it wants the next page of privacy
+/// receipts. Both cursor fields are `None` for the first page; to page,
+/// the webview passes back the `created_at` and `id` of the last row it
+/// holds and the core returns only strictly older rows. The pair must
+/// travel together — half a cursor is a validation error, not a page —
+/// and the fields are plain strings: the webview names a row, it never
+/// writes SQL or orders the core around.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EgressReceiptsInput {
+    /// `created_at` of the last receipt of the previous page.
+    pub before_created_at: Option<String>,
+    /// `id` of the last receipt of the previous page — the tiebreaker
+    /// when several log rows share one millisecond timestamp.
+    pub before_id: Option<String>,
+}
+
 /// What the family sees when they ask "is my privacy on?".
 ///
 /// The store's state is implicit: `AppState` cannot exist without an open
@@ -146,22 +163,29 @@ impl Serialize for AppError {
 // macro namespace (E0255).
 
 /// The daily view: the recommendations currently marked served, newest
-/// first, each with its evidence links. The output-budget CHECK caps a day
-/// at three served recommendations, so this list stays short by
-/// construction. The intelligence layer that serves recommendations owns
-/// expiring them; until it lands, this view shows the served set the store
-/// holds — the app renders what the store holds.
+/// first, each with its evidence links. The served query is explicitly
+/// bounded by [`DAILY_SERVED_LIMIT`] — the same budget the `daily_budget`
+/// CHECK enforces at write time — so this list stays short by
+/// construction, whatever the store may hold. The intelligence layer
+/// that serves recommendations owns expiring them; until it lands, this
+/// view shows the served set the store holds — the app renders what the
+/// store holds.
 #[tauri::command]
 fn daily_recommendations(state: State<'_, AppState>) -> Result<Vec<RecommendationView>, AppError> {
     daily_recommendations_core(state.inner())
 }
 
-/// The privacy receipts screen's source: every egress-log row, newest
-/// first, read-only. The log is append-only at the schema level; this
-/// command adds no write path of its own.
+/// The privacy receipts screen's source: one page of the egress log,
+/// newest first, read-only. The log is append-only at the schema level;
+/// this command adds no write path of its own. The webview controls only
+/// where the page starts — a keyset cursor carried in
+/// [`EgressReceiptsInput`] — never the page size or the ordering.
 #[tauri::command]
-fn egress_receipts(state: State<'_, AppState>) -> Result<Vec<ReceiptView>, AppError> {
-    egress_receipts_core(state.inner())
+fn egress_receipts(
+    state: State<'_, AppState>,
+    input: EgressReceiptsInput,
+) -> Result<Vec<ReceiptView>, AppError> {
+    egress_receipts_core(state.inner(), input)
 }
 
 /// The family-facing privacy status: is the scan layer up right now?
@@ -269,6 +293,23 @@ fn list_goals(
 //
 // Testable without a Tauri runtime: pure functions over `&AppState`.
 
+/// The append-only egress log's page size: how many receipts one
+/// `egress_receipts` call returns. The log grows with every egress attempt
+/// (BLOCKs included) and each row carries `payload_json` +
+/// `laya_scan_json` blobs, so the receipts screen reads it in keyset
+/// pages instead of transferring the whole table; the webview derives
+/// "show the load-more control" from a full page. Mirrored by
+/// `RECEIPTS_PAGE_SIZE` in `app/src/lib/ipc.ts` — the surface tests pin
+/// the two sides in lockstep.
+pub(crate) const RECEIPTS_PAGE_SIZE: i64 = 200;
+
+/// The daily output budget: the `daily_budget` CHECK
+/// (`served_count BETWEEN 0 AND 3`, `M001_CORE_SCHEMA`) caps a day at
+/// three served recommendations. The served query enforces the same bound
+/// explicitly so the view's cost — including its per-row evidence
+/// lookups — is bounded even if the budget table were ever relaxed.
+const DAILY_SERVED_LIMIT: i64 = 3;
+
 pub(crate) fn daily_recommendations_core(
     app: &AppState,
 ) -> Result<Vec<RecommendationView>, AppError> {
@@ -282,10 +323,11 @@ pub(crate) fn daily_recommendations_core(
                created_at, expires_at
         FROM recommendation
         WHERE status = 'served'
-        ORDER BY created_at DESC, id ASC";
+        ORDER BY created_at DESC, id ASC
+        LIMIT ?1";
 
     let mut statement = conn.prepare(SERVED_SQL)?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map([DAILY_SERVED_LIMIT], |row| {
         Ok(RecommendationView {
             id: row.get(0)?,
             goal_id: row.get(1)?,
@@ -316,33 +358,61 @@ pub(crate) fn daily_recommendations_core(
     Ok(recommendations)
 }
 
-pub(crate) fn egress_receipts_core(app: &AppState) -> Result<Vec<ReceiptView>, AppError> {
+pub(crate) fn egress_receipts_core(
+    app: &AppState,
+    input: EgressReceiptsInput,
+) -> Result<Vec<ReceiptView>, AppError> {
+    // A cursor is the (created_at, id) pair of the last row the webview
+    // holds: one without the other would silently redefine where the page
+    // starts, so half a cursor is refused rather than resolved.
+    if input.before_created_at.is_some() != input.before_id.is_some() {
+        return Err(AppError::Validation(
+            "the receipts cursor needs both created_at and id, or neither".to_string(),
+        ));
+    }
+
     let mut store = app.lock_store()?;
     let conn = store.conn();
 
+    // Keyset pagination over (created_at, id) — the same pair the index
+    // `idx_egress_created` orders. `created_at` is fixed-width UTC ISO
+    // text, so lexicographic order is chronological order and the cursor
+    // is exact even when rows share a timestamp. The first page binds
+    // NULL for both cursor parts and the ORs reduce to "all rows".
+    //
+    // The id comparison points UP (`id > ?2`), not down: the sort breaks
+    // timestamp ties by id ASCENDING, so the rows still to be served in a
+    // tie group carry ids LARGER than the cursor's. (`id < ?2` re-serves
+    // the tie-mate just above the cursor and skips the one just below —
+    // the 450-row walk test with tied millisecond inserts catches both.)
     const RECEIPTS_SQL: &str = "
         SELECT id, purpose, payload_json, payload_hash, transformation_version,
                layer1_verdict, laya_scan_json, laya_model_version,
                decision, reason, created_at
         FROM egress_log
-        ORDER BY created_at DESC, id ASC";
+        WHERE (?1 IS NULL OR created_at < ?1 OR (created_at = ?1 AND id > ?2))
+        ORDER BY created_at DESC, id ASC
+        LIMIT ?3";
 
     let mut statement = conn.prepare(RECEIPTS_SQL)?;
-    let rows = statement.query_map([], |row| {
-        Ok(ReceiptView {
-            id: row.get(0)?,
-            purpose: row.get(1)?,
-            payload_json: row.get(2)?,
-            payload_hash: row.get(3)?,
-            transformation_version: row.get(4)?,
-            layer1_verdict: row.get(5)?,
-            laya_scan_json: row.get(6)?,
-            laya_model_version: row.get(7)?,
-            decision: row.get(8)?,
-            reason: row.get(9)?,
-            created_at: row.get(10)?,
-        })
-    })?;
+    let rows = statement.query_map(
+        rusqlite::params![input.before_created_at, input.before_id, RECEIPTS_PAGE_SIZE,],
+        |row| {
+            Ok(ReceiptView {
+                id: row.get(0)?,
+                purpose: row.get(1)?,
+                payload_json: row.get(2)?,
+                payload_hash: row.get(3)?,
+                transformation_version: row.get(4)?,
+                layer1_verdict: row.get(5)?,
+                laya_scan_json: row.get(6)?,
+                laya_model_version: row.get(7)?,
+                decision: row.get(8)?,
+                reason: row.get(9)?,
+                created_at: row.get(10)?,
+            })
+        },
+    )?;
     rows.collect::<Result<Vec<ReceiptView>, rusqlite::Error>>()
         .map_err(AppError::from)
 }

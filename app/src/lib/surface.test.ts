@@ -33,7 +33,6 @@ describe("the frontend IPC surface", () => {
     // READ_COMMANDS: managed-state-only commands (no webview input).
     expect([...READ_COMMANDS]).toEqual([
       "daily_recommendations",
-      "egress_receipts",
       "privacy_status",
       "get_household",
     ]);
@@ -41,8 +40,10 @@ describe("the frontend IPC surface", () => {
 
   it("mirrors the backend's audited input commands, and only those", () => {
     // INPUT_COMMANDS: every command whose only webview-controlled
-    // parameter is a named `*Input` payload struct.
+    // parameter is a named `*Input` payload struct — the onboarding
+    // writes, and the receipts screen's pagination cursor.
     expect([...INPUT_COMMANDS]).toEqual([
+      "egress_receipts",
       "create_household",
       "update_household",
       "add_member",
