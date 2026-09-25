@@ -44,6 +44,19 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # The zero-telemetry dependency policy (deny.toml) — bans telemetry and
+  # analytics crates, licenses, RustSec advisories, crates.io-only sources.
+  # The threat model (docs/threat-model.md, "Dependencies") makes this audit
+  # the standing proof that the telemetry claim holds.
+  cargo-deny:
+    name: Zero-telemetry dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The action reads deny.toml and checks the full lockfile; no Rust
+      # toolchain or Tauri system dependencies are needed.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   frontend-test:
     name: Frontend tests
     runs-on: ubuntu-latest

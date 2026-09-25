@@ -3,6 +3,7 @@ name = "ha-cli"
 description = "Home Advisor demo CLI: seeds a family, exercises the privacy gate, prints the receipt"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lib]
