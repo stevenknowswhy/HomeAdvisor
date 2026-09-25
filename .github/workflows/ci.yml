@@ -105,7 +105,7 @@ jobs:
         run: pnpm tauri build
         working-directory: app
       - name: Upload installer artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: homeadvisor-installers
           # Bundles land in the workspace-root target dir, not under app/.
@@ -146,7 +146,7 @@ jobs:
         run: pnpm tauri build
         working-directory: app
       - name: Upload installer artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: homeadvisor-installers-macos
           # Bundles land in the workspace-root target dir, not under app/.
