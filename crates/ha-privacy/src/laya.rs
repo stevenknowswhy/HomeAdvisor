@@ -47,7 +47,6 @@
 //! sidecar reports probabilities, the gate decides.
 
 use std::collections::HashMap;
-use std::io;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -106,7 +105,10 @@ const LEAK_QUESTIONS: &[(&str, LeakClass, &str)] = &[
 // An edit that empties `LEAK_QUESTIONS` would leave the confidence fold in
 // `parse_predict_response` with nothing to trust — make that a compile
 // error instead of a runtime `expect` away from a crash.
-const _: () = assert!(!LEAK_QUESTIONS.is_empty(), "LEAK_QUESTIONS must not be empty");
+const _: () = assert!(
+    !LEAK_QUESTIONS.is_empty(),
+    "LEAK_QUESTIONS must not be empty"
+);
 
 /// Why [`LayaSidecar::new`] refused a configuration.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -168,40 +170,43 @@ impl LayaSidecar {
 }
 
 fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout(timeout).build()
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .build()
+        .into()
 }
 
 impl LeakScanner for LayaSidecar {
     fn scan(&self, payload: &Value) -> Result<ScanReport, ScanError> {
         let url = format!("{}/predict", self.base_url);
-        let response = self
+        let mut response = self
             .agent
             .post(&url)
-            .set("Content-Type", "application/json")
             .send_json(predict_body(payload))
             .map_err(|error| transport_error(&url, error))?;
 
-        let status = response.status();
+        let status = response.status().as_u16();
         if status != 200 {
             return Err(ScanError::Unavailable(format!(
                 "sidecar at {url} returned HTTP {status}"
             )));
         }
-        let body = response.into_string().map_err(|error: io::Error| {
+        let body = response.body_mut().read_to_string().map_err(|error| {
             ScanError::Unavailable(format!("could not read the sidecar response: {error}"))
         })?;
         parse_predict_response(&body)
     }
 }
 
-/// Map a `ureq` transport failure to a scan error. A non-2xx status is also
-/// here: `send_json` errors on it, and an error page is no scan at all.
+/// Map a `ureq` failure to a scan error. By default ureq turns 4xx/5xx
+/// statuses into `Error::StatusCode`, so an error page is no scan at all —
+/// it lands here, not in the happy path.
 fn transport_error(url: &str, error: ureq::Error) -> ScanError {
     match error {
-        ureq::Error::Status(status, _) => {
+        ureq::Error::StatusCode(status) => {
             ScanError::Unavailable(format!("sidecar at {url} returned HTTP {status}"))
         }
-        ureq::Error::Transport(transport) => {
+        transport => {
             ScanError::Unavailable(format!("could not reach the sidecar at {url}: {transport}"))
         }
     }
