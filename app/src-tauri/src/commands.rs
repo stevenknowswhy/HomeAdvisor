@@ -15,7 +15,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::{probe_sidecar, AppState, SIDECAR_PROBE_TIMEOUT};
+use crate::state::AppState;
 
 // ───────────────────────────── views ──────────────────────────────
 //
@@ -84,17 +84,19 @@ pub struct ReceiptView {
 ///
 /// The store's state is implicit: `AppState` cannot exist without an open
 /// store, so there is no degraded store state to report. The sidecar is the
-/// part that can fail today — and per the spec, a sidecar that is down
-/// means every gated operation reports BLOCK.
+/// part that can fail — and per the spec, a sidecar that is down means
+/// every gated operation reports BLOCK.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PrivacyStatus {
-    /// The sidecar is reachable; the scan layer can do its job.
+    /// The sidecar is up and answering the supervisor's probes; the scan
+    /// layer can do its job.
     Protected {
         /// The configured model checkpoint, as receipts record it.
         checkpoint: String,
     },
-    /// Fail-closed: the semantic scan is unreachable, so nothing may be sent.
+    /// Fail-closed: supervision is not healthy (the sidecar is down,
+    /// starting, or unsupervised and unreachable), so nothing may be sent.
     SidecarUnavailable { detail: String },
 }
 
@@ -112,6 +114,8 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("sidecar configuration error: {0}")]
     LayaConfig(#[from] ha_privacy::LayaConfigError),
+    #[error("privacy pipeline error: {0}")]
+    Privacy(#[from] ha_privacy::PrivacyError),
     #[error("the store lock is poisoned — a previous query panicked mid-access")]
     StoreLockPoisoned,
 }
@@ -150,20 +154,25 @@ fn egress_receipts(state: State<'_, AppState>) -> Result<Vec<ReceiptView>, AppEr
 
 /// The family-facing privacy status: is the scan layer up right now?
 ///
-/// The probe is a bounded TCP connect (≤ [`SIDECAR_PROBE_TIMEOUT`]), run on
-/// a blocking thread so the async runtime is never stalled by a dead
-/// socket. Every failure folds into [`PrivacyStatus::SidecarUnavailable`] —
+/// The question is answered by the sidecar supervisor — the same machine the
+/// gated egress pre-flight consults, so the status the family sees and the
+/// decision the gate makes can never disagree. The check is bounded (a TCP
+/// probe at most [`crate::state::SIDECAR_PROBE_TIMEOUT`]), run on a blocking
+/// thread so the async runtime is never stalled by a dead socket. Every
+/// unhealthy fold lands in [`PrivacyStatus::SidecarUnavailable`] —
 /// fail-closed, including here. The `Result` wrapper is Tauri's rule for
 /// async commands that take state by reference, not an error channel: an
 /// unrecoverable probe joins into the unavailable status instead.
 #[tauri::command]
 async fn privacy_status(state: State<'_, AppState>) -> Result<PrivacyStatus, AppError> {
-    let sidecar = state.inner().sidecar().clone();
-    let status = tauri::async_runtime::spawn_blocking(move || privacy_status_core(&sidecar))
-        .await
-        .unwrap_or_else(|join_error| PrivacyStatus::SidecarUnavailable {
-            detail: format!("the status probe could not complete: {join_error}"),
-        });
+    let supervisor = state.inner().supervisor().clone();
+    let checkpoint = state.inner().sidecar().checkpoint().to_string();
+    let status =
+        tauri::async_runtime::spawn_blocking(move || privacy_status_core(&supervisor, &checkpoint))
+            .await
+            .unwrap_or_else(|join_error| PrivacyStatus::SidecarUnavailable {
+                detail: format!("the status probe could not complete: {join_error}"),
+            });
     Ok(status)
 }
 
@@ -249,10 +258,13 @@ pub(crate) fn egress_receipts_core(app: &AppState) -> Result<Vec<ReceiptView>, A
         .map_err(AppError::from)
 }
 
-pub(crate) fn privacy_status_core(sidecar: &ha_privacy::LayaSidecar) -> PrivacyStatus {
-    match probe_sidecar(sidecar.base_url(), SIDECAR_PROBE_TIMEOUT) {
+pub(crate) fn privacy_status_core(
+    supervisor: &crate::supervisor::SidecarSupervisor,
+    checkpoint: &str,
+) -> PrivacyStatus {
+    match supervisor.ensure_healthy() {
         Ok(()) => PrivacyStatus::Protected {
-            checkpoint: sidecar.checkpoint().to_string(),
+            checkpoint: checkpoint.to_string(),
         },
         Err(detail) => PrivacyStatus::SidecarUnavailable { detail },
     }
