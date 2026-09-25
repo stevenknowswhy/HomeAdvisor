@@ -31,7 +31,7 @@ jobs:
             echo "::error::Tag v${expected} does not match app/src-tauri/tauri.conf.json version ${actual}. Bump the version in app/src-tauri/tauri.conf.json (and the README asset URLs), commit, delete the tag, and re-tag."
             exit 1
           fi
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
         with:
