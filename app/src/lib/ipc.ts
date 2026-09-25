@@ -1,14 +1,15 @@
-//! The webview's one door to the Rust core: the audited read commands, and
-//! nothing else.
+//! The webview's one door to the Rust core: the audited read commands and
+//! the audited input commands, and nothing else.
 //!
 //! The backend's surface audit (`app/src-tauri/src/audit.rs`) is the
-//! authority on what may be invoked: exactly three commands, each taking
-//! only managed state — no SQL, no paths, no network targets from the
-//! webview. This module mirrors that surface on the frontend side and keeps
-//! it single-sourced: every IPC call in the app goes through
-//! [`readCommand`], which refuses anything outside [`READ_COMMANDS`]. The
-//! frontend surface test pins this file as the only `invoke` site, so a
-//! write path cannot reach the core without failing the audit twice.
+//! authority on what may be invoked: three managed-state-only read commands
+//! plus onboarding commands that each take exactly one named `*Input`
+//! payload — no SQL, no paths, no network targets from the webview. This
+//! module mirrors that surface on the frontend side and keeps it
+//! single-sourced: every IPC call in the app goes through [`readCommand`]
+//! or [`inputCommand`], which refuse anything outside their lists. The
+//! frontend surface test pins this file as the only `invoke` site, so an
+//! unaudited call cannot reach the core without failing the audit twice.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -76,12 +77,35 @@ export const READ_COMMANDS = [
   "daily_recommendations",
   "egress_receipts",
   "privacy_status",
+  "get_household",
 ] as const;
 
 export type ReadCommand = (typeof READ_COMMANDS)[number];
 
 export function isReadCommand(name: string): name is ReadCommand {
   return (READ_COMMANDS as readonly string[]).includes(name);
+}
+
+/** The onboarding commands that each take exactly one named `*Input`
+ *  payload — the audited write side (household profile, members, goals
+ *  CRUD). Single-sourced to mirror `app_commands!` in `commands.rs`;
+ *  the backend signature audit permits these because their only
+ *  webview-controlled parameter is a reviewed `*Input` struct. */
+export const INPUT_COMMANDS = [
+  "create_household",
+  "update_household",
+  "add_member",
+  "list_members",
+  "create_goal",
+  "update_goal",
+  "delete_goal",
+  "list_goals",
+] as const;
+
+export type InputCommand = (typeof INPUT_COMMANDS)[number];
+
+export function isInputCommand(name: string): name is InputCommand {
+  return (INPUT_COMMANDS as readonly string[]).includes(name);
 }
 
 /** Invoke one audited read command. Anything else — a write, a delete, a
@@ -93,6 +117,21 @@ export async function readCommand<T>(command: string): Promise<T> {
     );
   }
   return invoke<T>(command);
+}
+
+/** Invoke one audited input command with its named payload. Anything
+ *  outside the list — a made-up name, a bare primitive, a second
+ *  parameter — is refused before the IPC boundary, fail-closed. */
+export async function inputCommand<T>(
+  command: string,
+  input: unknown,
+): Promise<T> {
+  if (!isInputCommand(command)) {
+    throw new Error(
+      `"${command}" is not an audited input command — the webview may only send reviewed payloads`,
+    );
+  }
+  return invoke<T>(command, { input });
 }
 
 /** The daily view's source: recommendations currently marked served,

@@ -21,6 +21,9 @@ ha-privacy = { path = "../../crates/ha-privacy" }
 # the sanctioned escape hatch for the app backend, as for the CLI demo
 # (see `ha_store::Store::conn`).
 rusqlite = "0.40"
+# Ids for onboarding rows are generated in the Rust core, never by the
+# webview; v4 is already in the tree via Tauri, so this adds no new code.
+uuid = { version = "1", features = ["v4"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 ha-core = { version = "0.1.0", path = "../../crates/ha-core" }

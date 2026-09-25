@@ -15,6 +15,11 @@
 use serde::Serialize;
 use tauri::State;
 
+use crate::onboarding::{
+    self, AddMemberInput, CreateGoalInput, CreateHouseholdInput, DeleteGoalInput, GoalView,
+    HouseholdView, ListGoalsInput, ListMembersInput, MemberView, UpdateGoalInput,
+    UpdateHouseholdInput,
+};
 use crate::state::AppState;
 
 // ───────────────────────────── views ──────────────────────────────
@@ -116,6 +121,13 @@ pub enum AppError {
     LayaConfig(#[from] ha_privacy::LayaConfigError),
     #[error("privacy pipeline error: {0}")]
     Privacy(#[from] ha_privacy::PrivacyError),
+    /// A value the webview sent fails a rule the core enforces — the
+    /// message is user-facing: it names the field and the constraint.
+    #[error("{0}")]
+    Validation(String),
+    /// The referenced object does not exist (household, member, goal, band).
+    #[error("not found: {0}")]
+    NotFound(String),
     #[error("the store lock is poisoned — a previous query panicked mid-access")]
     StoreLockPoisoned,
 }
@@ -174,6 +186,83 @@ async fn privacy_status(state: State<'_, AppState>) -> Result<PrivacyStatus, App
                 detail: format!("the status probe could not complete: {join_error}"),
             });
     Ok(status)
+}
+
+// ───────────────────── onboarding commands ────────────────────────
+//
+// Write commands follow the same thin-adapter shape as the reads: one
+// `input` parameter carries a typed `*Input` struct (the one payload form
+// the surface audit allows), the core in `onboarding.rs` validates and
+// writes through the store.
+
+/// The household profile, or `None` while onboarding has not run.
+#[tauri::command]
+fn get_household(state: State<'_, AppState>) -> Result<Option<HouseholdView>, AppError> {
+    onboarding::get_household_core(state.inner())
+}
+
+/// Create the household — the one onboarding step that happens once per
+/// store. A second creation is a validation error, not a duplicate row.
+#[tauri::command]
+fn create_household(
+    state: State<'_, AppState>,
+    input: CreateHouseholdInput,
+) -> Result<HouseholdView, AppError> {
+    onboarding::create_household_core(state.inner(), input)
+}
+
+/// Edit the band-typed profile: timezone, locale, region class, income band.
+#[tauri::command]
+fn update_household(
+    state: State<'_, AppState>,
+    input: UpdateHouseholdInput,
+) -> Result<HouseholdView, AppError> {
+    onboarding::update_household_core(state.inner(), input)
+}
+
+/// Add a member with a band-typed age. `is_child` is derived from the role,
+/// never sent.
+#[tauri::command]
+fn add_member(state: State<'_, AppState>, input: AddMemberInput) -> Result<MemberView, AppError> {
+    onboarding::add_member_core(state.inner(), input)
+}
+
+/// The household's members, oldest first — what the onboarding view lists.
+#[tauri::command]
+fn list_members(
+    state: State<'_, AppState>,
+    input: ListMembersInput,
+) -> Result<Vec<MemberView>, AppError> {
+    onboarding::list_members_core(state.inner(), input)
+}
+
+/// Create a goal: domain, importance (1–10), and optional ISO dates for the
+/// goal's time window.
+#[tauri::command]
+fn create_goal(state: State<'_, AppState>, input: CreateGoalInput) -> Result<GoalView, AppError> {
+    onboarding::create_goal_core(state.inner(), input)
+}
+
+/// Edit a goal's ranking fields — importance, timeframes, status, progress.
+#[tauri::command]
+fn update_goal(state: State<'_, AppState>, input: UpdateGoalInput) -> Result<GoalView, AppError> {
+    onboarding::update_goal_core(state.inner(), input)
+}
+
+/// Delete a goal and its relationships. A plain DELETE — nothing hidden.
+#[tauri::command]
+fn delete_goal(state: State<'_, AppState>, input: DeleteGoalInput) -> Result<(), AppError> {
+    onboarding::delete_goal_core(state.inner(), input)
+}
+
+/// The household's goals, most important first — what the onboarding view
+/// lists and what the intelligence layer will rank from later.
+#[tauri::command]
+fn list_goals(
+    state: State<'_, AppState>,
+    input: ListGoalsInput,
+) -> Result<Vec<GoalView>, AppError> {
+    onboarding::list_goals_core(state.inner(), input)
 }
 
 // ────────────────────────────── cores ─────────────────────────────
@@ -315,4 +404,17 @@ macro_rules! app_commands {
     };
 }
 
-app_commands![daily_recommendations, egress_receipts, privacy_status];
+app_commands![
+    daily_recommendations,
+    egress_receipts,
+    privacy_status,
+    get_household,
+    create_household,
+    update_household,
+    add_member,
+    list_members,
+    create_goal,
+    update_goal,
+    delete_goal,
+    list_goals,
+];

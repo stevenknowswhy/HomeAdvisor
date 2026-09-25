@@ -25,11 +25,15 @@ use tauri::Manager as _;
 mod audit;
 mod commands;
 mod egress;
+mod onboarding;
 mod state;
 mod supervisor;
 
 #[cfg(test)]
 mod command_tests;
+
+#[cfg(test)]
+mod onboarding_tests;
 
 /// Runs the desktop app.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

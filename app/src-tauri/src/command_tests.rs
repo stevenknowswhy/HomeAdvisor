@@ -19,10 +19,11 @@ fn test_key() -> StoreKey {
     StoreKey::from_passphrase("test-key").unwrap()
 }
 
-/// A loopback endpoint nothing listens on: the daily and receipt reads never
-/// touch the sidecar, and this keeps that property honest — if a read started
-/// probing, the test would slow down and fail.
-fn dead_sidecar_url() -> &'static str {
+/// A loopback endpoint nothing listens on — shared with the onboarding e2e
+/// tests, so both suites compose `AppState` against the same dead sidecar
+/// and the same supervised (unreachable) pre-flight. If a read or a write
+/// started probing, the test would slow down and fail.
+pub(crate) fn dead_sidecar_url() -> &'static str {
     "http://127.0.0.1:9"
 }
 
@@ -33,7 +34,7 @@ fn dead_sidecar() -> LayaSidecar {
 /// A supervisor in external mode (nothing to spawn) probing the given
 /// endpoint — the same shape `open_state` builds when no sidecar command is
 /// configured, with test-speed timings.
-fn external_supervisor_at(url: &str) -> SidecarSupervisor {
+pub(crate) fn external_supervisor_at(url: &str) -> SidecarSupervisor {
     SidecarSupervisor::with_policy(
         Box::new(TcpProbe::new(url, Duration::from_millis(250))),
         Box::new(ExternalSidecar),

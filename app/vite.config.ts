@@ -14,6 +14,14 @@ export default defineConfig({
     target: "es2021",
     // minify omitted: Vite 8 defaults to oxc; esbuild minify is deprecated.
     sourcemap: false,
+    // Two entries: index.html (production, Tauri webview) and preview.html
+    // (browser-only UI preview backed by IPC fixtures).
+    rollupOptions: {
+      input: {
+        index: "index.html",
+        preview: "preview.html",
+      },
+    },
   },
   // Under Vitest, resolve Svelte's browser build so component tests mount the
   // real runtime; outside tests Vite's default resolution stands.

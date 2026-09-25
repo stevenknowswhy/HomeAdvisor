@@ -1,53 +1,7 @@
 <script lang="ts">
-  import BandPicker from "./lib/BandPicker.svelte";
   import DailyView from "./lib/DailyView.svelte";
+  import OnboardingView from "./lib/OnboardingView.svelte";
   import ReceiptsScreen from "./lib/ReceiptsScreen.svelte";
-
-  // Demo band options, shaped like the real thing: they come from the seeded
-  // v1 taxonomy (migration 002 in ha-store) and the household region CHECK.
-  // Onboarding replaces this demo profile section with real views.
-  const childAgeOptions = [
-    { value: "age_0_2", label: "0-2" },
-    { value: "age_3_5", label: "3-5" },
-    { value: "age_6_9", label: "6-9" },
-    { value: "age_10_12", label: "10-12" },
-    { value: "age_13_15", label: "13-15" },
-    { value: "age_16_17", label: "16-17" },
-  ];
-
-  const adultAgeOptions = [
-    { value: "age_25_34", label: "25-34" },
-    { value: "age_35_44", label: "35-44" },
-    { value: "age_45_54", label: "45-54" },
-  ];
-
-  const incomeOptions = [
-    { value: "income_under_50k", label: "under-50k" },
-    { value: "income_50k_75k", label: "50k-75k" },
-    { value: "income_75k_100k", label: "75k-100k" },
-    { value: "income_100k_150k", label: "100k-150k" },
-    { value: "income_150k_200k", label: "150k-200k" },
-    { value: "income_200k_plus", label: "200k+" },
-  ];
-
-  const regionOptions = [
-    { value: "urban_metro", label: "Urban metro" },
-    { value: "suburban", label: "Suburban" },
-    { value: "rural", label: "Rural" },
-    { value: "small_town", label: "Small town" },
-  ];
-
-  let childAgeBand = $state<string | null>(null);
-  let adultAgeBand = $state<string | null>("age_35_44");
-  let incomeBand = $state<string | null>(null);
-  let regionClass = $state<string | null>("urban_metro");
-
-  function bandLabel(
-    options: { value: string; label: string }[],
-    value: string | null,
-  ): string {
-    return options.find((option) => option.value === value)?.label ?? "—";
-  }
 </script>
 
 <main>
@@ -59,55 +13,14 @@
     </p>
     <p class="scaffold-note">
       The Today view and the privacy receipts below read your encrypted store
-      directly. Nothing in this window leaves your machine.
+      directly, and onboarding writes through the same audited surface.
+      Nothing in this window leaves your machine.
     </p>
   </header>
 
   <DailyView />
 
-  <section aria-labelledby="profile-heading">
-    <h2 id="profile-heading">Household profile (demo)</h2>
-    <p class="section-hint">
-      Bands, not raw values: the store holds band foreign keys only, so exact
-      ages and incomes are unrepresentable by design.
-    </p>
-    <div class="pickers">
-      <BandPicker
-        id="child-age-band"
-        label="Child age band"
-        options={childAgeOptions}
-        value={childAgeBand}
-        onSelect={(value) => (childAgeBand = value)}
-      />
-      <BandPicker
-        id="adult-age-band"
-        label="Adult age band"
-        options={adultAgeOptions}
-        value={adultAgeBand}
-        onSelect={(value) => (adultAgeBand = value)}
-      />
-      <BandPicker
-        id="income-band"
-        label="Household income band"
-        options={incomeOptions}
-        value={incomeBand}
-        onSelect={(value) => (incomeBand = value)}
-      />
-      <BandPicker
-        id="region-class"
-        label="Region class"
-        options={regionOptions}
-        value={regionClass}
-        onSelect={(value) => (regionClass = value)}
-      />
-    </div>
-    <p class="selected-summary">
-      Selected — child: {bandLabel(childAgeOptions, childAgeBand)} · adult:
-      {bandLabel(adultAgeOptions, adultAgeBand)} · income:
-      {bandLabel(incomeOptions, incomeBand)} · region:
-      {bandLabel(regionOptions, regionClass)}
-    </p>
-  </section>
+  <OnboardingView />
 
   <ReceiptsScreen />
 </main>
@@ -158,36 +71,7 @@
     font-size: 1.6rem;
   }
 
-  h2 {
-    margin: 0 0 0.25rem;
-    font-size: 1.15rem;
-  }
-
-  section {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 1.25rem 1.5rem 1.5rem;
-  }
-
-  .section-hint {
-    color: var(--muted);
-    font-size: 0.9rem;
-    margin: 0 0 1rem;
-  }
-
   .scaffold-note {
     font-size: 0.85rem;
-  }
-
-  .pickers {
-    display: grid;
-    gap: 0.75rem;
-  }
-
-  .selected-summary {
-    margin: 0.75rem 0 0;
-    font-size: 0.9rem;
-    color: var(--muted);
   }
 </style>
