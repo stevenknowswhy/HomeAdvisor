@@ -1,0 +1,105 @@
+# The zero-telemetry dependency policy, enforced in CI by `cargo-deny`
+# (.github/workflows/ci.yml, job `cargo-deny`).
+#
+# The policy, in one line: nothing this workspace links may phone home.
+# Concretely — no dependency whose purpose is telemetry, analytics, crash
+# reporting, or advertising; permissive licenses only; no known-vulnerable
+# versions; crates.io as the only source. The threat model
+# (docs/threat-model.md, "Dependencies") makes this audit the standing proof
+# that the telemetry claim holds. If a dependency here is ever genuinely
+# needed, the exception belongs in this file — explicit, in review, never
+# silently.
+
+[graph]
+# The app ships beyond Linux; check every platform's graph so a
+# Windows/macOS-only telemetry dependency cannot hide from the audit.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+]
+
+[advisories]
+version = 2
+# Known-vulnerable versions fail the audit; yanked releases are flagged but
+# do not fail it (a yank upstream should not break the build unreviewed).
+yanked = "warn"
+unmaintained = "all"
+# Unmaintained-status advisories on transitive crates we cannot fix, accepted
+# in review as of 2026-09 (checked against the state of the ecosystem at the
+# time). Every OTHER unmaintained advisory still fails the audit.
+ignore = [
+    # proc-macro-error, unmaintained (RUSTSEC-2024-0370): reached via the
+    # proc-macro ecosystem (tauri-codegen / tauri-macros and friends). No fix
+    # exists on our side; removal is upstream work.
+    "RUSTSEC-2024-0370",
+    # The rust-unic crate family, unmaintained (RUSTSEC-2025-0075/0080/0081/
+    # 0098/0100): reached only via urlpattern -> tauri-utils -> tauri. Drop
+    # these ignores when Tauri replaces urlpattern.
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0098",
+    "RUSTSEC-2025-0100",
+]
+
+[licenses]
+version = 2
+# Permissive licenses only. Anything unlisted fails the audit; adding an
+# entry here is a reviewed decision.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+
+[bans]
+# Duplicated transitive crates are a smell, not a violation.
+multiple-versions = "warn"
+deny = [
+    # Telemetry, analytics, crash reporting, and ad SDKs, by name. This list
+    # is the enforcement of the zero-telemetry policy; extend it as new
+    # offenders appear in the ecosystem.
+    { crate = "sentry" },
+    { crate = "sentry-types" },
+    { crate = "sentry-core" },
+    { crate = "sentry-backtrace" },
+    { crate = "sentry-contexts" },
+    { crate = "sentry-tracing" },
+    { crate = "sentry-log" },
+    { crate = "sentry-panic" },
+    { crate = "posthog-rs" },
+    { crate = "posthog-client" },
+    { crate = "mixpanel" },
+    { crate = "analytics" },
+    { crate = "amplitude" },
+    { crate = "datadog-serverless" },
+    { crate = "opentelemetry" },
+    { crate = "opentelemetry_sdk" },
+    { crate = "opentelemetry-otlp" },
+    { crate = "tracing-opentelemetry" },
+    { crate = "telemetry" },
+    { crate = "telemetry-batteries" },
+    { crate = "notify-crash" },
+    { crate = "bugsnag" },
+    { crate = "rollbar" },
+    { crate = "raygun" },
+    { crate = "countly" },
+    { crate = "snowplow_tracker" },
+    { crate = "google-analytics" },
+]
+
+[sources]
+# The graph comes from crates.io only — no git dependencies, no second
+# registry. A dependency that can only be had from elsewhere is a reviewed
+# exception, not a one-line change.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -3,6 +3,7 @@ name = "ha-privacy"
 description = "Home Advisor privacy gate: deterministic redaction, local semantic leak-scan, fail-closed decision"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

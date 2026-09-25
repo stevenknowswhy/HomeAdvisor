@@ -3,6 +3,7 @@ name = "ha-app"
 description = "Home Advisor desktop shell — Tauri 2 app over the ha-* crates"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lib]
