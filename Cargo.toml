@@ -16,3 +16,9 @@ publish = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Release profile: the DMG/installer artifacts ship these binaries — thin LTO and a single codegen unit for size/speed, symbols stripped. No panic = "abort": the supervisor's lock helper relies on unwinding, and the fail-closed philosophy treats panics as diagnosable crashes, not silent aborts.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

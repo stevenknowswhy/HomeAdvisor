@@ -1,0 +1,39 @@
+# Automated dependency updates. The dependency policy lives in deny.toml
+# (zero-telemetry enforcement); these PRs, reviewed alongside the cargo-deny
+# CI job, are how that surface stays audited. Minor+patch updates collapse
+# into one PR per ecosystem so each audit reviews a single diff.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # pnpm lockfile updates ride the npm ecosystem entry.
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
