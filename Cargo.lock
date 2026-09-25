@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "ha-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "getrandom 0.3.4",
  "ha-core",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "ha-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ha-core",
  "ha-privacy",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "ha-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "semver",
  "serde",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "ha-privacy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ha-core",
  "ha-store",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "ha-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
