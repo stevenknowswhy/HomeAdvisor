@@ -10,6 +10,8 @@
 //!   the single-sourced registration the surface audit pins.
 //! - [`state`] — the managed `AppState`: the encrypted store handle, the
 //!   loopback scan client, and the sidecar supervisor.
+//! - [`keystore`] — where the database key comes from: the Keychain on
+//!   macOS, the env override everywhere, fail-closed diagnostics always.
 //! - [`supervisor`] — the sidecar lifecycle machine: spawn, health-check,
 //!   restart; `privacy_status` and the egress pre-flight both read it.
 //! - [`egress`] — the app's one gated egress path: supervision pre-flight,
@@ -25,6 +27,7 @@ use tauri::Manager as _;
 mod audit;
 mod commands;
 mod egress;
+mod keystore;
 mod onboarding;
 mod state;
 mod supervisor;
@@ -33,32 +36,44 @@ mod supervisor;
 mod command_tests;
 
 #[cfg(test)]
+mod keystore_tests;
+
+#[cfg(test)]
 mod onboarding_tests;
 
 /// Runs the desktop app.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::expect_used)] // builder failure at startup is unrecoverable; the template aborts with a diagnostic
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .invoke_handler(commands::invoke_handler())
-        .setup(|app| {
-            // Fail-closed startup: `open_state` needs the database key and
-            // aborts with a diagnostic when it is absent — the app never
-            // runs against a plaintext or empty store. First-run key
-            // creation belongs to onboarding.
-            app.manage(state::open_state(app.handle())?);
-            Ok(())
-        })
         .build(tauri::generate_context!())
-        .expect("failed to build the Home Advisor application")
-        .run(|app_handle, event| {
-            // Kill the supervised sidecar on exit: a closed window must not
-            // orphan the child process the app spawned. This is process
-            // cleanup, not fail-closure — the sidecar is our own child.
-            if let tauri::RunEvent::Exit = event {
-                if let Some(state) = app_handle.try_state::<state::AppState>() {
-                    state.shutdown();
-                }
+        .expect("failed to build the Home Advisor application");
+
+    // State bootstrap *before* the event loop, deliberately: on macOS the
+    // Tauri setup hook runs inside `did_finish_launching`, where a returned
+    // error unwinds across the Objective-C boundary and aborts the process
+    // before any window exists — the v0.1.0 first-run SIGABRT. Here a
+    // fail-closed startup prints its cause and exits nonzero, cleanly.
+    match state::open_state(app.handle()) {
+        Ok(app_state) => {
+            app.manage(app_state);
+        }
+        Err(error) => {
+            eprintln!("Home Advisor could not start.");
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+
+    app.run(|app_handle, event| {
+        // Kill the supervised sidecar on exit: a closed window must not
+        // orphan the child process the app spawned. This is process
+        // cleanup, not fail-closure — the sidecar is our own child.
+        if let tauri::RunEvent::Exit = event {
+            if let Some(state) = app_handle.try_state::<state::AppState>() {
+                state.shutdown();
             }
-        });
+        }
+    });
 }

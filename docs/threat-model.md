@@ -30,9 +30,11 @@ runtime as a known, declared boundary instead of hiding it behind an absolute.
 
 **Assumption, stated once:** no malware already running on the user's machine is
 in scope. An on-device attacker can read the SQLCipher database's memory, the
-keystore, and the loopback port, and defeats any local-first design by
-definition. Local device security is a separate threat class (disk encryption,
-OS account security) that this document does not claim to solve.
+OS keystore that holds its key (on macOS, the login Keychain — and losing that
+Keychain item makes the data permanently undecryptable by design), and the
+loopback port, and defeats any local-first design by definition. Local device
+security is a separate threat class (disk encryption, OS account security)
+that this document does not claim to solve.
 
 ## Outbound path inventory
 

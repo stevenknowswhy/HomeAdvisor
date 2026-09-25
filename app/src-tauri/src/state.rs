@@ -95,10 +95,17 @@ impl AppState {
 ///   Either way, fail-closed is the contract.
 ///
 /// Fail-closed at startup: without a database key the app cannot serve
-/// reads, so setup aborts with a diagnostic instead of opening a plaintext
-/// or empty store. First-run key creation belongs to onboarding; until that
-/// slice lands the key arrives through `HOMEADVISOR_DB_KEY` (the same
-/// hand-off the CLI documents).
+/// reads, so it aborts with a diagnostic instead of opening a plaintext or
+/// empty store. The key machine lives in [`crate::keystore`]:
+/// `HOMEADVISOR_DB_KEY` overrides everything when set (the same hand-off
+/// the CLI documents — tests and CLI interop rely on it unchanged);
+/// otherwise macOS keys the store from the login Keychain, first run
+/// generating the key and later runs reading it back. A database whose key
+/// is missing or unreadable stops startup with a plain-language diagnostic.
+///
+/// Called before the event loop (`lib.rs`) so every failure here exits
+/// cleanly with its cause printed — never an unwind across the launch
+/// callback.
 pub fn open_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     let db_path = match std::env::var("HOMEADVISOR_DB") {
         Ok(path) => std::path::PathBuf::from(path),
@@ -108,8 +115,32 @@ pub fn open_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error
             dir.join("homeadvisor.db")
         }
     };
+    // Read before anything opens the store: the key machine decides between
+    // fresh-create and reopen on exactly this fact.
+    let db_exists = db_path.exists();
 
-    let key = ha_store::StoreKey::from_env("HOMEADVISOR_DB_KEY")?;
+    // The override wins when set, with its error paths intact (empty or
+    // non-unicode values fail as they always did). An absent variable is no
+    // longer an error: the keystore machine takes over.
+    let env_key = match std::env::var("HOMEADVISOR_DB_KEY") {
+        Ok(key) => Some(key),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => {
+            return Err(Box::new(
+                crate::keystore::StartupKeyError::InvalidOverride {
+                    detail: error.to_string(),
+                },
+            ));
+        }
+    };
+
+    let key = crate::keystore::resolve_startup_key(
+        &db_path,
+        db_exists,
+        env_key,
+        crate::keystore::platform_keystore().as_deref(),
+        crate::keystore::generate_key,
+    )?;
     let store = Store::open(db_path, &key)?;
 
     let sidecar_url = std::env::var("HOMEADVISOR_SIDECAR_URL")

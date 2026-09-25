@@ -95,3 +95,18 @@ cargo clippy --workspace --all-targets -- -D warnings  # lint gate
 ```
 
 CI runs the same three on every push and pull request.
+
+### The desktop app's database key
+
+On macOS the app keeps its SQLCipher database key in the login Keychain
+(service `com.forhemit.homeadvisor`, account `db-key`): first launch generates
+256 bits of randomness and files it there, later launches read it back, and
+nothing is ever stored beside the database. If a database exists but its key
+is missing or unreadable, the app says so in plain language and exits — it
+never opens the store with anything less, and there is deliberately no
+recovery path for ciphertext without its key.
+
+`HOMEADVISOR_DB_KEY` remains the development/CI override and wins when set.
+Non-macOS desktop builds have no OS keystore integration: they start only
+with `HOMEADVISOR_DB_KEY` set. Desktop support outside macOS is unchanged —
+the key story there is exactly what it was in v0.1.0.
