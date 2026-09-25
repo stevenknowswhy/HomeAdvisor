@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { READ_COMMANDS } from "./ipc";
+import { INPUT_COMMANDS, READ_COMMANDS } from "./ipc";
 
 // The frontend's half of the IPC surface audit (the authoritative half lives
 // in `app/src-tauri/src/audit.rs`): the webview can reach the core only
@@ -30,10 +30,27 @@ describe("the frontend IPC surface", () => {
   it("mirrors the backend's audited read commands, and only those", () => {
     // Keep in lockstep with `app_commands!` in `app/src-tauri/src/commands.rs`
     // — the Rust surface audit is authoritative; this pins the mirror.
+    // READ_COMMANDS: managed-state-only commands (no webview input).
     expect([...READ_COMMANDS]).toEqual([
       "daily_recommendations",
       "egress_receipts",
       "privacy_status",
+      "get_household",
+    ]);
+  });
+
+  it("mirrors the backend's audited input commands, and only those", () => {
+    // INPUT_COMMANDS: every command whose only webview-controlled
+    // parameter is a named `*Input` payload struct.
+    expect([...INPUT_COMMANDS]).toEqual([
+      "create_household",
+      "update_household",
+      "add_member",
+      "list_members",
+      "create_goal",
+      "update_goal",
+      "delete_goal",
+      "list_goals",
     ]);
   });
 

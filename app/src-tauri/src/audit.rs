@@ -9,12 +9,16 @@
 //!    `commands.rs` — the audited surface and the registered surface are
 //!    the same surface by construction.
 //! 2. **Signature audit.** Every `#[tauri::command]` function in the
-//!    command module is parsed out of the source and must take exactly one
-//!    parameter: the managed [`AppState`] state. A command that accepted
-//!    raw SQL, a file path, or a network target from the webview would need
-//!    a webview-controlled parameter and fails here, in CI — before review,
-//!    not in production. The parser is deliberately strict: a signature it
-//!    cannot fully parse is a violation, never a pass.
+//!    command module is parsed out of the source and every parameter must
+//!    be either the managed [`AppState`] state or a named `*Input` payload
+//!    struct — the one webview-controlled shape the surface allows. A
+//!    command that accepted raw SQL, a file path, or a network target
+//!    would need a `String`/`PathBuf`-style parameter, and any primitive
+//!    or untyped parameter fails here, in CI — before review, not in
+//!    production. Input structs are deliberately named and reviewed: their
+//!    fields are the full extent of what the webview can send. The parser
+//!    is deliberately strict: a signature it cannot fully parse is a
+//!    violation, never a pass.
 
 /// Every parameter of every command must be the managed state — either
 /// spelling, with any lifetime arrangement is rejected: the audited shape
@@ -27,6 +31,18 @@ fn is_managed_state_param(param: &str) -> bool {
         }
         // A parameter without a type cannot compile, and a signature the
         // audit cannot understand is not a signature to wave through.
+        None => false,
+    }
+}
+
+/// The one webview-controlled parameter shape: a named `*Input` struct
+/// (e.g. `CreateGoalInput`), by convention the reviewed extent of what the
+/// webview can send. Primitives (`String`, `PathBuf`, numbers) and generic
+/// wrappers (`Vec<_>`) never pass — only a named, reviewed struct does.
+fn is_typed_input_param(param: &str) -> bool {
+    let normalized: String = param.split_whitespace().collect::<String>();
+    match normalized.split_once(':') {
+        Some((_, type_part)) => type_part.ends_with("Input"),
         None => false,
     }
 }
@@ -47,7 +63,9 @@ pub fn audit_command_signatures(source: &str) -> Vec<SignatureViolation> {
         .flat_map(|(command, parameters)| {
             parameters
                 .into_iter()
-                .filter(|parameter| !is_managed_state_param(parameter))
+                .filter(|parameter| {
+                    !is_managed_state_param(parameter) && !is_typed_input_param(parameter)
+                })
                 .map(move |parameter| SignatureViolation {
                     command: command.clone(),
                     parameter,
@@ -227,6 +245,24 @@ mod tests {
         assert_eq!(audit_command_signatures(source).len(), 1);
     }
 
+    #[test]
+    fn a_typed_input_struct_is_the_one_allowed_payload() {
+        let source = r#"
+            #[tauri::command]
+            fn create_goal(state: State<'_, AppState>, input: CreateGoalInput) { todo!() }
+        "#;
+        assert_eq!(audit_command_signatures(source), vec![]);
+    }
+
+    #[test]
+    fn a_primitive_payload_is_rejected_even_in_an_input_position() {
+        let source = r#"
+            #[tauri::command]
+            fn create_goal(state: State<'_, AppState>, input: String) { todo!() }
+        "#;
+        assert_eq!(audit_command_signatures(source).len(), 1);
+    }
+
     /// The audit of the real surface. Both assertions matter: no
     /// violations, and enough commands actually parsed that an empty scan
     /// cannot pass by accident.
@@ -253,7 +289,20 @@ mod tests {
     fn the_ipc_surface_is_exactly_the_specified_commands() {
         assert_eq!(
             COMMAND_NAMES,
-            &["daily_recommendations", "egress_receipts", "privacy_status"]
+            &[
+                "daily_recommendations",
+                "egress_receipts",
+                "privacy_status",
+                "get_household",
+                "create_household",
+                "update_household",
+                "add_member",
+                "list_members",
+                "create_goal",
+                "update_goal",
+                "delete_goal",
+                "list_goals",
+            ]
         );
     }
 }
