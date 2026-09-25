@@ -18,7 +18,7 @@ jobs:
     name: Build & publish macOS release
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Fail in seconds when the tag and the app version disagree; otherwise a
       # v0.1.1 tag builds for five minutes and publishes a DMG stamped with the
       # stale conf version (this shipped as HomeAdvisor_0.1.0_aarch64.dmg).
