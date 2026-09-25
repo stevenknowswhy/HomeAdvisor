@@ -15,7 +15,7 @@ says anything on first launch depends on how the DMG reaches your machine.
 ### Recommended: download with curl (zero Gatekeeper prompts)
 
 ```sh
-curl -L -o ~/Downloads/HomeAdvisor.dmg https://github.com/stevenknowswhy/HomeAdvisor/releases/latest/download/HomeAdvisor_0.1.0_aarch64.dmg
+curl -L -o ~/Downloads/HomeAdvisor.dmg https://github.com/stevenknowswhy/HomeAdvisor/releases/latest/download/HomeAdvisor_0.1.1_aarch64.dmg
 ```
 
 Then open the downloaded image and drag Home Advisor to **Applications**. This
@@ -26,8 +26,8 @@ resolves to the newest published release asset as long as the naming scheme
 
 ### Alternative: browser download (quarantined — one Terminal step)
 
-Download `HomeAdvisor_<version>_aarch64.dmg` (for v0.1.0:
-`HomeAdvisor_0.1.0_aarch64.dmg`) from the
+Download `HomeAdvisor_<version>_aarch64.dmg` (for v0.1.1:
+`HomeAdvisor_0.1.1_aarch64.dmg`) from the
 [latest release](https://github.com/stevenknowswhy/HomeAdvisor/releases/latest),
 open the image, and drag Home Advisor to **Applications**. Browser-downloaded
 files are quarantined, and because the app is unsigned, macOS may report it as
@@ -110,3 +110,18 @@ recovery path for ciphertext without its key.
 Non-macOS desktop builds have no OS keystore integration: they start only
 with `HOMEADVISOR_DB_KEY` set. Desktop support outside macOS is unchanged —
 the key story there is exactly what it was in v0.1.0.
+
+### Cutting a release
+
+Three edits move together on a release, because the published DMG is named
+from the app version, not the tag:
+
+1. Bump `version` in `app/src-tauri/tauri.conf.json`.
+2. Update the README asset URLs to match — the curl command above and the
+   browser-download example.
+3. Commit, tag `vX.Y.Z`, and push the tag; the release workflow builds and
+   publishes the DMG.
+
+The release workflow now fails a tag whose version doesn't match
+`tauri.conf.json` before any build starts, so the first two steps can no
+longer drift apart silently.
