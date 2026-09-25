@@ -17,7 +17,7 @@ thiserror = "2"
 rusqlite = "0.40"
 # Loopback HTTP client for the Laya sidecar. Blocking by design (no async
 # runtime in a local-first binary); TLS disabled — the sidecar is loopback-only.
-ureq = { version = "2", default-features = false, features = ["json"] }
+ureq = { version = "3", default-features = false, features = ["json"] }
 
 [lints]
 workspace = true
