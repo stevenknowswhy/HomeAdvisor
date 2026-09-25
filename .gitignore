@@ -1,6 +1,10 @@
 # Rust build artifacts
 /target
 
+# Frontend dependencies and build output (app/)
+app/node_modules/
+app/dist/
+
 # Environment and local secrets
 .env
 .env.*

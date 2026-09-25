@@ -5,6 +5,7 @@ members = [
     "crates/ha-store",
     "crates/ha-privacy",
     "crates/ha-cli",
+    "app/src-tauri",
 ]
 
 [workspace.package]
