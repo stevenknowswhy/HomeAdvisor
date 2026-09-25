@@ -178,6 +178,49 @@ function pageReceipts(input: unknown): ReceiptView[] {
   return all.slice(cursorIndex + 1, cursorIndex + 1 + RECEIPTS_PAGE_SIZE);
 }
 
+// The onboarding and household-management commands, kept in-memory: the
+// preview starts with no household and grows one as the operator walks the
+// forms, so the receipts and daily fixtures read like a real store.
+interface MockHousehold {
+  id: string;
+  timezone: string;
+  locale: string | null;
+  region_class: string;
+  income_band_id: string | null;
+}
+
+interface MockMember {
+  id: string;
+  household_id: string;
+  role: string;
+  display_name: string | null;
+  age_band_id: string;
+  school_stage: string | null;
+  is_child: boolean;
+}
+
+interface MockGoal {
+  id: string;
+  household_id: string;
+  person_id: string | null;
+  title: string;
+  detail: string | null;
+  domain: string;
+  importance: number;
+  timeframe_start: string | null;
+  target_date: string | null;
+  status: string;
+  progress: number;
+}
+
+let household: MockHousehold | null = null;
+let members: MockMember[] = [];
+let goals: MockGoal[] = [];
+
+function inputOf<T>(args?: { input?: unknown }): T {
+  return (args?.input ?? {}) as T;
+}
+
 export async function invoke(
   command: string,
   args?: { input?: unknown },
@@ -192,6 +235,125 @@ export async function invoke(
       return scenario === "empty" ? [] : pageReceipts(args?.input);
     case "privacy_status":
       return { sidecar: "running", store: "open" };
+    case "get_household":
+      return household;
+    case "create_household": {
+      const input = inputOf<{
+        timezone: string;
+        locale: string | null;
+        region_class: string;
+        income_band_id: string;
+      }>(args);
+      household = {
+        id: "hh-preview",
+        timezone: input.timezone,
+        locale: input.locale,
+        region_class: input.region_class,
+        income_band_id: input.income_band_id,
+      };
+      return household;
+    }
+    case "update_household": {
+      const input = inputOf<{
+        household_id: string;
+        timezone: string;
+        locale: string | null;
+        region_class: string;
+        income_band_id: string | null;
+      }>(args);
+      household = {
+        id: input.household_id,
+        timezone: input.timezone,
+        locale: input.locale,
+        region_class: input.region_class,
+        income_band_id: input.income_band_id,
+      };
+      return household;
+    }
+    case "add_member": {
+      const input = inputOf<{
+        household_id: string;
+        role: string;
+        display_name: string | null;
+        age_band_id: string;
+        school_stage: string | null;
+      }>(args);
+      const member: MockMember = {
+        id: `member-${members.length + 1}`,
+        household_id: input.household_id,
+        role: input.role,
+        display_name: input.display_name,
+        age_band_id: input.age_band_id,
+        school_stage: input.school_stage,
+        is_child: input.role === "child",
+      };
+      members.push(member);
+      return member;
+    }
+    case "list_members": {
+      const input = inputOf<{ household_id: string }>(args);
+      return members.filter((m) => m.household_id === input.household_id);
+    }
+    case "create_goal": {
+      const input = inputOf<{
+        household_id: string;
+        person_id: string | null;
+        title: string;
+        detail: string | null;
+        domain: string;
+        importance: number;
+        timeframe_start: string | null;
+        target_date: string | null;
+      }>(args);
+      const goal: MockGoal = {
+        id: `goal-${goals.length + 1}`,
+        household_id: input.household_id,
+        person_id: input.person_id,
+        title: input.title,
+        detail: input.detail,
+        domain: input.domain,
+        importance: input.importance,
+        timeframe_start: input.timeframe_start,
+        target_date: input.target_date,
+        status: "active",
+        progress: 0,
+      };
+      goals.push(goal);
+      return goal;
+    }
+    case "update_goal": {
+      const input = inputOf<{
+        goal_id: string;
+        title: string;
+        detail: string | null;
+        domain: string;
+        importance: number;
+        timeframe_start: string | null;
+        target_date: string | null;
+        status: string;
+        progress: number;
+      }>(args);
+      const goal = goals.find((g) => g.id === input.goal_id);
+      if (goal === undefined) throw `unknown goal: ${input.goal_id}`;
+      goal.title = input.title;
+      goal.detail = input.detail;
+      goal.domain = input.domain;
+      goal.importance = input.importance;
+      goal.timeframe_start = input.timeframe_start;
+      goal.target_date = input.target_date;
+      goal.status = input.status;
+      goal.progress = input.progress;
+      return goal;
+    }
+    case "delete_goal": {
+      const input = inputOf<{ goal_id: string }>(args);
+      goals = goals.filter((g) => g.id !== input.goal_id);
+      return null;
+    }
+    case "list_goals": {
+      const input = inputOf<{ household_id: string }>(args);
+      return goals.filter((g) => g.household_id === input.household_id);
+    }
     default:
       throw `unknown command: ${command}`;
   }
