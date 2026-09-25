@@ -53,7 +53,7 @@ jobs:
       # release, so it verifies the build without cutting a Release.
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Bundles land in the workspace-root target dir, not under app/.
           files: target/release/bundle/dmg/*.dmg
