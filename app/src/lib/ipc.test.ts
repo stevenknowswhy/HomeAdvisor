@@ -9,6 +9,8 @@ import {
   errorMessage,
   fetchDailyRecommendations,
   fetchEgressReceipts,
+  inputCommand,
+  isInputCommand,
   isReadCommand,
   readCommand,
 } from "./ipc";
@@ -36,19 +38,51 @@ describe("readCommand", () => {
 
   it("recognizes every audited read command", () => {
     expect(isReadCommand("daily_recommendations")).toBe(true);
-    expect(isReadCommand("egress_receipts")).toBe(true);
     expect(isReadCommand("privacy_status")).toBe(true);
+    expect(isReadCommand("egress_receipts")).toBe(false);
     expect(isReadCommand("write_receipt")).toBe(false);
   });
 
-  it("exposes typed fetchers over the two read commands the views use", async () => {
+  it("exposes a typed fetcher for the daily view", async () => {
     invoke.mockResolvedValueOnce([{ id: "rec-1" }]);
-    invoke.mockResolvedValueOnce([{ id: "eg-1" }]);
 
     await expect(fetchDailyRecommendations()).resolves.toEqual([
       { id: "rec-1" },
     ]);
-    await expect(fetchEgressReceipts()).resolves.toEqual([{ id: "eg-1" }]);
+  });
+});
+
+describe("inputCommand", () => {
+  it("recognizes the receipts cursor as an input, not a read", () => {
+    // The receipts walk carries a pagination payload, so it lives on the
+    // audited input side even though it only ever reads the store.
+    expect(isInputCommand("egress_receipts")).toBe(true);
+    expect(isReadCommand("egress_receipts")).toBe(false);
+  });
+
+  it("invokes an audited input command with its named payload", async () => {
+    invoke.mockResolvedValueOnce([]);
+    const cursor = {
+      beforeCreatedAt: "2026-09-25T10:00:00.000Z",
+      beforeId: "eg-1",
+    };
+
+    await expect(fetchEgressReceipts(cursor)).resolves.toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("egress_receipts", { input: cursor });
+  });
+
+  it("refuses anything outside the audited surface before the IPC boundary", async () => {
+    for (const command of [
+      "write_receipt",
+      "execute_sql",
+      "egress_receipts; DROP TABLE egress_log",
+      "",
+    ]) {
+      await expect(inputCommand(command, {})).rejects.toThrow(
+        "is not an audited input command",
+      );
+    }
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 

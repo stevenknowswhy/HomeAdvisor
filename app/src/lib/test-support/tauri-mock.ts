@@ -7,7 +7,12 @@
 // The scenario comes from `?scenario=`: `populated` (default), `empty`, or
 // `error` — mirroring the three states the component tests cover.
 
-import type { RecommendationView, ReceiptView } from "../ipc";
+import { RECEIPTS_PAGE_SIZE } from "../ipc";
+import type {
+  EgressReceiptsInput,
+  RecommendationView,
+  ReceiptView,
+} from "../ipc";
 
 const scenario = new URLSearchParams(window.location.search).get(
   "scenario",
@@ -123,7 +128,60 @@ const receipts: ReceiptView[] = [
   },
 ];
 
-export async function invoke(command: string): Promise<unknown> {
+// Older fixture receipts for the pagination walk: enough rows below the
+// hand-written receipts that the load-more control has pages to fetch
+// (two full preview pages plus a terminal one). Timestamps descend
+// strictly, mirroring the append-only log the real command pages over.
+const OLDER_RECEIPT_COUNT = 420;
+
+const olderReceipts: ReceiptView[] = Array.from(
+  { length: OLDER_RECEIPT_COUNT },
+  (_, n) => ({
+    id: `eg-gen-${String(n).padStart(4, "0")}`,
+    purpose: "domain research — wealth",
+    payloadJson: JSON.stringify({
+      url: "https://example.com/research/wealth",
+      query: "college savings strategies",
+    }),
+    payloadHash: `gen${String(n).padStart(4, "0")}4b6a8c0e2d4b6a8c`,
+    transformationVersion: "layer1-2026-06",
+    createdAt: `2026-09-25 09:${String(13 - Math.floor(n / 60)).padStart(2, "0")}:${String(59 - (n % 60)).padStart(2, "0")}Z`,
+    layer1Verdict: JSON.stringify({
+      status: "passed",
+      removed: ["child.name"],
+      generalized: ["household.income"],
+    }),
+    layaScanJson: JSON.stringify({
+      first: { per_class: [["FullName", 0.02]], confidence: 0.92 },
+    }),
+    layaModelVersion: "laya-mini-2026-06",
+    decision: n % 3 === 0 ? "BLOCK" : n % 3 === 1 ? "QUARANTINE" : "ALLOW",
+    reason:
+      n % 3 === 0 ? "leak class above threshold: unique combination" : null,
+  }),
+);
+
+function pageReceipts(input: unknown): ReceiptView[] {
+  const cursor = (input ?? {}) as Partial<EgressReceiptsInput>;
+  const all = [...receipts, ...olderReceipts];
+  if (cursor.beforeCreatedAt == null || cursor.beforeId == null) {
+    return all.slice(0, RECEIPTS_PAGE_SIZE);
+  }
+  const cursorIndex = all.findIndex(
+    (receipt) =>
+      receipt.createdAt === cursor.beforeCreatedAt &&
+      receipt.id === cursor.beforeId,
+  );
+  if (cursorIndex === -1) {
+    throw "unknown receipt cursor — the page cannot be found in this log";
+  }
+  return all.slice(cursorIndex + 1, cursorIndex + 1 + RECEIPTS_PAGE_SIZE);
+}
+
+export async function invoke(
+  command: string,
+  args?: { input?: unknown },
+): Promise<unknown> {
   if (scenario === "error") {
     throw "store error: database key not supplied";
   }
@@ -131,7 +189,7 @@ export async function invoke(command: string): Promise<unknown> {
     case "daily_recommendations":
       return scenario === "empty" ? [] : recommendations;
     case "egress_receipts":
-      return scenario === "empty" ? [] : receipts;
+      return scenario === "empty" ? [] : pageReceipts(args?.input);
     case "privacy_status":
       return { sidecar: "running", store: "open" };
     default:

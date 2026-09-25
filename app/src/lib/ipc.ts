@@ -2,9 +2,10 @@
 //! the audited input commands, and nothing else.
 //!
 //! The backend's surface audit (`app/src-tauri/src/audit.rs`) is the
-//! authority on what may be invoked: three managed-state-only read commands
-//! plus onboarding commands that each take exactly one named `*Input`
-//! payload — no SQL, no paths, no network targets from the webview. This
+//! authority on what may be invoked: two managed-state-only read commands
+//! plus input commands that each take exactly one named `*Input` payload
+//! (the onboarding writes, and the receipts screen's pagination cursor) —
+//! no SQL, no paths, no network targets from the webview. This
 //! module mirrors that surface on the frontend side and keeps it
 //! single-sourced: every IPC call in the app goes through [`readCommand`]
 //! or [`inputCommand`], which refuse anything outside their lists. The
@@ -69,13 +70,27 @@ export interface ReceiptView {
   createdAt: string;
 }
 
+/** The webview-side page size of the receipts walk. Keep in lockstep with
+ *  `RECEIPTS_PAGE_SIZE` in `commands.rs` — a full page is the signal that
+ *  more rows may exist, so the two sides must agree or the load-more
+ *  control shows and hides one call out of phase. */
+export const RECEIPTS_PAGE_SIZE = 200;
+
+/** The receipts pagination cursor (`EgressReceiptsInput` in commands.rs,
+ *  serde camelCase): the `created_at` and `id` of the last receipt of the
+ *  previous page, or both `null` for the first page. The pair travels
+ *  together — the backend rejects half a cursor. */
+export interface EgressReceiptsInput {
+  beforeCreatedAt: string | null;
+  beforeId: string | null;
+}
+
 // ───────────────────────── the audited surface ────────────────────
 
 /** The commands the backend registers and the surface audit permits —
  *  single-sourced here to mirror `app_commands!` in `commands.rs`. */
 export const READ_COMMANDS = [
   "daily_recommendations",
-  "egress_receipts",
   "privacy_status",
   "get_household",
 ] as const;
@@ -86,12 +101,13 @@ export function isReadCommand(name: string): name is ReadCommand {
   return (READ_COMMANDS as readonly string[]).includes(name);
 }
 
-/** The onboarding commands that each take exactly one named `*Input`
- *  payload — the audited write side (household profile, members, goals
- *  CRUD). Single-sourced to mirror `app_commands!` in `commands.rs`;
- *  the backend signature audit permits these because their only
- *  webview-controlled parameter is a reviewed `*Input` struct. */
+/** The commands that each take exactly one named `*Input` payload — the
+ *  audited input side (onboarding writes, and the receipts screen's
+ *  pagination cursor). Single-sourced to mirror `app_commands!` in
+ *  `commands.rs`; the backend signature audit permits these because their
+ *  only webview-controlled parameter is a reviewed `*Input` struct. */
 export const INPUT_COMMANDS = [
+  "egress_receipts",
   "create_household",
   "update_household",
   "add_member",
@@ -140,10 +156,13 @@ export function fetchDailyRecommendations(): Promise<RecommendationView[]> {
   return readCommand<RecommendationView[]>("daily_recommendations");
 }
 
-/** The privacy receipts screen's source: every egress-log row, newest
- *  first, read-only. */
-export function fetchEgressReceipts(): Promise<ReceiptView[]> {
-  return readCommand<ReceiptView[]>("egress_receipts");
+/** The privacy receipts screen's source: one page of the egress log,
+ *  newest first, read-only. The first page passes no cursor; every next
+ *  page passes the `createdAt`/`id` of the last receipt shown. */
+export function fetchEgressReceipts(
+  input: EgressReceiptsInput,
+): Promise<ReceiptView[]> {
+  return inputCommand<ReceiptView[]>("egress_receipts", input);
 }
 
 // ───────────────────────────── errors ─────────────────────────────

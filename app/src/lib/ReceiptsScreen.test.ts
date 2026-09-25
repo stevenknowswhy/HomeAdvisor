@@ -1,14 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/svelte";
 
 const fetchEgressReceipts = vi.hoisted(() => vi.fn());
 vi.mock("./ipc", () => ({
   errorMessage: (e: unknown) => String(e),
   fetchEgressReceipts,
+  RECEIPTS_PAGE_SIZE: 200,
 }));
 
 import ReceiptsScreen from "./ReceiptsScreen.svelte";
-import type { ReceiptView } from "./ipc";
+import { RECEIPTS_PAGE_SIZE, type ReceiptView } from "./ipc";
 
 // Receipt fixtures shaped like the egress-log rows the backend serializes:
 // camelCase projections of purpose, decision, payload_hash, layer1_verdict,
@@ -59,6 +65,19 @@ const BLOCKED = () =>
   });
 
 describe("ReceiptsScreen — spec VC4", () => {
+  /** A receipts page of `count` rows starting at fixture index `offset`,
+   *  with deterministic descending timestamps and unique ids so every row
+   *  has its own cursor slot. */
+  function pageOf(count = RECEIPTS_PAGE_SIZE, offset = 0): ReceiptView[] {
+    return Array.from({ length: count }, (_, i) => {
+      const n = offset + i;
+      return receipt({
+        id: `eg-${String(n).padStart(4, "0")}`,
+        createdAt: `2026-09-25 09:${String(23 - Math.floor(n / 60)).padStart(2, "0")}:${String(59 - (n % 60)).padStart(2, "0")}Z`,
+      });
+    });
+  }
+
   it("renders every receipt read-only with payload hash and scan verdicts", async () => {
     fetchEgressReceipts.mockResolvedValueOnce([receipt(), BLOCKED()]);
 
@@ -96,7 +115,9 @@ describe("ReceiptsScreen — spec VC4", () => {
     await screen.findAllByTestId("receipt-row");
 
     // Nothing in the whole screen may mutate a receipt: no forms, no buttons,
-    // no editable inputs, no links masquerading as actions.
+    // no editable inputs, no links masquerading as actions. These two rows
+    // fit inside one page, so no load-more control renders either — the
+    // screen has no interactive controls at all here.
     expect(container.querySelector("button")).toBeNull();
     expect(container.querySelector("form")).toBeNull();
     expect(container.querySelectorAll("input, textarea, select").length).toBe(
@@ -149,5 +170,108 @@ describe("ReceiptsScreen — spec VC4", () => {
 
     resolve([receipt()]);
     await screen.findByTestId("receipt-row");
+  });
+
+  it("loads the first page without a cursor, then advances the cursor on load-more", async () => {
+    const firstPage = pageOf();
+    const secondPage = pageOf(37, RECEIPTS_PAGE_SIZE);
+    fetchEgressReceipts
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
+
+    render(ReceiptsScreen);
+    await screen.findAllByTestId("receipt-row");
+    // First page: no cursor.
+    expect(fetchEgressReceipts).toHaveBeenLastCalledWith({
+      beforeCreatedAt: null,
+      beforeId: null,
+    });
+
+    await fireEvent.click(screen.getByTestId("receipts-load-more"));
+
+    // The cursor is the last receipt of the previous page.
+    const last = firstPage[firstPage.length - 1];
+    expect(fetchEgressReceipts).toHaveBeenLastCalledWith({
+      beforeCreatedAt: last.createdAt,
+      beforeId: last.id,
+    });
+    await waitFor(() =>
+      expect(screen.getAllByTestId("receipt-row").length).toBe(
+        RECEIPTS_PAGE_SIZE + 37,
+      ),
+    );
+  });
+
+  it("hides the load-more control once a page comes back short", async () => {
+    fetchEgressReceipts
+      .mockResolvedValueOnce(pageOf())
+      .mockResolvedValueOnce([receipt({ id: "eg-last" })]);
+
+    render(ReceiptsScreen);
+    await screen.findAllByTestId("receipt-row");
+    expect(screen.queryByTestId("receipts-load-more")).toBeTruthy();
+
+    await fireEvent.click(screen.getByTestId("receipts-load-more"));
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("receipt-row").length).toBe(
+        RECEIPTS_PAGE_SIZE + 1,
+      ),
+    );
+    expect(screen.queryByTestId("receipts-load-more")).toBeNull();
+  });
+
+  it("marks the load-more control busy while the next page is in flight", async () => {
+    let resolvePage: ((value: ReceiptView[]) => void) | undefined;
+    fetchEgressReceipts
+      .mockResolvedValueOnce(pageOf())
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolvePage = resolve;
+        }),
+      );
+
+    render(ReceiptsScreen);
+    await screen.findAllByTestId("receipt-row");
+
+    const button = screen.getByTestId(
+      "receipts-load-more",
+    ) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    await fireEvent.click(button);
+
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain("Loading more receipts");
+
+    // A full page keeps the control mounted and re-enables it; a short
+    // page would hide it (covered by the test above).
+    resolvePage?.(pageOf(RECEIPTS_PAGE_SIZE, RECEIPTS_PAGE_SIZE));
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(screen.getByTestId("receipts-load-more").textContent).toContain(
+      "Show more receipts",
+    );
+  });
+
+  it("keeps loaded receipts and alerts when the next page fails", async () => {
+    fetchEgressReceipts
+      .mockResolvedValueOnce(pageOf())
+      .mockRejectedValueOnce("store error: database key not supplied");
+
+    render(ReceiptsScreen);
+    await screen.findAllByTestId("receipt-row");
+
+    await fireEvent.click(screen.getByTestId("receipts-load-more"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "The next page of receipts could not be read",
+    );
+    expect(alert.textContent).toContain(
+      "store error: database key not supplied",
+    );
+    // The first page stays on screen.
+    expect(screen.getAllByTestId("receipt-row").length).toBe(
+      RECEIPTS_PAGE_SIZE,
+    );
   });
 });

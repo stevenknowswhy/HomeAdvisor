@@ -10,7 +10,7 @@ use crate::StoreError;
 
 /// Ordered migration scripts. Entry `n` runs once, inside one transaction
 /// together with its `schema_version` row, and never runs again.
-pub const MIGRATIONS: &[&str] = &[M001_CORE_SCHEMA, M002_SEED_BANDS];
+pub const MIGRATIONS: &[&str] = &[M001_CORE_SCHEMA, M002_SEED_BANDS, M003_QUERY_INDEXES];
 
 const CREATE_SCHEMA_VERSION: &str = "
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -481,4 +481,24 @@ INSERT INTO band (id, band_type, label, min_value, max_value, sort_order) VALUES
     ('income_100k_150k',   'income', '100k-150k',100000, 149999,  40),
     ('income_150k_200k',   'income', '150k-200k',150000, 199999,  50),
     ('income_200k_plus',   'income', '200k+',    200000,   NULL,  60);
+"#;
+
+/// Migration 003 — indexes for the two hot read paths. Both order by
+/// `created_at DESC, id ASC`; `created_at` is fixed-width UTC ISO text
+/// (`strftime('%Y-%m-%dT%H:%M:%fZ')`), so lexicographic order is
+/// chronological order and a (created_at, id) keyset cursor is correct.
+/// Without these, every receipts page render and every daily-view read
+/// is a full scan and sort of a blob-heavy table.
+///
+/// `egress_log` grows with every egress attempt — including BLOCKs — and
+/// each row carries `payload_json` + `laya_scan_json`, so the receipts
+/// query needs the index most. `recommendation`'s served query is keyed
+/// by `status` first so the daily view's three-row read never scans the
+/// pending/dismissed history.
+const M003_QUERY_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_egress_created
+    ON egress_log (created_at DESC, id);
+
+CREATE INDEX IF NOT EXISTS idx_recommendation_served
+    ON recommendation (status, created_at DESC, id);
 "#;

@@ -34,10 +34,12 @@
 </script>
 
 <tr data-testid="receipt-row">
-  <td class="receipt-row__purpose">
+  <!-- Row header: the purpose identifies the row, so screen readers
+       announce it while traversing the row's other cells. -->
+  <th scope="row" class="receipt-row__purpose">
     {purpose}
     <div class="receipt-row__time">{createdAt}</div>
-  </td>
+  </th>
   <td><StatusBadge status={decision} /></td>
   <td class="receipt-row__hash">
     <code title={payloadHash}>{shortHash}</code>
@@ -53,11 +55,17 @@
 </tr>
 
 <style>
-  td {
+  td,
+  th.receipt-row__purpose {
     padding: 0.5rem 0.75rem;
     border-top: 1px solid var(--line, #e3e7ec);
     text-align: left;
     vertical-align: top;
+  }
+
+  th.receipt-row__purpose {
+    /* The purpose reads as a cell, not a heading — the styling stays. */
+    font-weight: inherit;
   }
 
   .receipt-row__hash code {

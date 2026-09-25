@@ -4,26 +4,68 @@
   import {
     errorMessage,
     fetchEgressReceipts,
+    RECEIPTS_PAGE_SIZE,
+    type EgressReceiptsInput,
     type ReceiptView,
   } from "./ipc";
   import { describeLayer1, describeScan, scanSummaryText } from "./verdicts";
 
   // The family-facing transparency surface: the append-only egress log,
-  // rendered read-only. Receipts are facts about the gate — what was gated,
-  // its hash, both verdicts, the decision — so this screen only ever reads
-  // through the audited `egress_receipts` command and renders; it has no
-  // edit, delete, or retry control, and none may be added without breaking
-  // the read-only test.
+  // rendered read-only, one keyset page at a time. Receipts are facts about
+  // the gate — what was gated, its hash, both verdicts, the decision — so
+  // this screen only ever reads through the audited `egress_receipts`
+  // command and renders; it has no edit, delete, or retry control, and
+  // none may be added without breaking the read-only test. The load-more
+  // button is a read control: it asks the core for the next page.
   let receipts = $state<ReceiptView[] | null>(null);
   let error = $state<string | null>(null);
+  let loadingMore = $state(false);
+  let loadError = $state<string | null>(null);
+
+  /** Length of the most recent page. A full page means more rows may
+   *  exist; a short one was the last. (An exactly-full log costs one
+   *  extra empty fetch before the control hides — accepted for the sake
+   *  of not counting the whole table on every read.) */
+  let lastPageCount = $state(0);
+
+  const hasMore = $derived(
+    receipts !== null && lastPageCount === RECEIPTS_PAGE_SIZE,
+  );
 
   onMount(async () => {
     try {
-      receipts = await fetchEgressReceipts();
+      const page = await fetchEgressReceipts({
+        beforeCreatedAt: null,
+        beforeId: null,
+      });
+      receipts = page;
+      lastPageCount = page.length;
     } catch (e) {
       error = errorMessage(e);
     }
   });
+
+  async function loadMore(): Promise<void> {
+    if (receipts === null || loadingMore) return;
+    const last = receipts[receipts.length - 1];
+    if (last === undefined) return;
+    loadingMore = true;
+    loadError = null;
+    try {
+      const cursor: EgressReceiptsInput = {
+        beforeCreatedAt: last.createdAt,
+        beforeId: last.id,
+      };
+      const page = await fetchEgressReceipts(cursor);
+      receipts = [...receipts, ...page];
+      lastPageCount = page.length;
+    } catch (e) {
+      // A failed page keeps every receipt already loaded on screen.
+      loadError = errorMessage(e);
+    } finally {
+      loadingMore = false;
+    }
+  }
 </script>
 
 <section aria-labelledby="receipts-heading">
@@ -55,7 +97,7 @@
       </p>
     </div>
   {:else}
-    <table data-testid="receipts-table">
+    <table data-testid="receipts-table" id="receipts-table">
       <caption class="visually-hidden">
         Append-only egress log receipts
       </caption>
@@ -84,6 +126,30 @@
         {/each}
       </tbody>
     </table>
+    {#if loadError !== null || hasMore}
+      <div class="receipts-more">
+        {#if loadError !== null}
+          <p
+            class="receipts-error"
+            role="alert"
+            data-testid="receipts-load-error"
+          >
+            The next page of receipts could not be read: {loadError}
+          </p>
+        {/if}
+        {#if hasMore}
+          <button
+            type="button"
+            data-testid="receipts-load-more"
+            onclick={loadMore}
+            disabled={loadingMore}
+            aria-controls="receipts-table"
+          >
+            {loadingMore ? "Loading more receipts…" : "Show more receipts"}
+          </button>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </section>
 
@@ -147,5 +213,33 @@
 
   .receipts-error {
     margin: 0;
+  }
+
+  .receipts-more {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .receipts-more button {
+    border: 1px solid var(--line, #e3e7ec);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted, #5b6675);
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.4rem 1rem;
+    cursor: pointer;
+  }
+
+  .receipts-more button:hover:not(:disabled) {
+    background: var(--line, #e3e7ec);
+  }
+
+  .receipts-more button:disabled {
+    cursor: default;
+    opacity: 0.7;
   }
 </style>

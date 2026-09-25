@@ -10,7 +10,8 @@ use ha_store::{Store, StoreKey};
 use rusqlite::Connection;
 
 use crate::commands::{
-    daily_recommendations_core, egress_receipts_core, privacy_status_core, PrivacyStatus,
+    daily_recommendations_core, egress_receipts_core, privacy_status_core, EgressReceiptsInput,
+    PrivacyStatus, ReceiptView, RECEIPTS_PAGE_SIZE,
 };
 use crate::state::AppState;
 use crate::supervisor::{ExternalSidecar, SidecarSupervisor, SupervisionPolicy, TcpProbe};
@@ -76,6 +77,27 @@ fn insert_recommendation(conn: &Connection, id: &str, status: &str, created_at: 
             status,
             created_at,
         ],
+    )
+    .unwrap();
+}
+
+/// The first receipts page: no cursor — the walk starts at the newest row.
+fn first_page() -> EgressReceiptsInput {
+    EgressReceiptsInput {
+        before_created_at: None,
+        before_id: None,
+    }
+}
+
+/// Insert one egress-log row. `created_at` is supplied by the caller: the
+/// timestamp is the pagination key, so tests control it directly.
+fn insert_receipt(conn: &Connection, id: &str, created_at: &str) {
+    conn.execute(
+        "INSERT INTO egress_log
+             (id, purpose, payload_json, payload_hash, transformation_version,
+              layer1_verdict, laya_scan_json, laya_model_version, decision, reason, created_at)
+         VALUES (?1, 'wealth_research', '{}', ?1, '1.0.0', 'clean', NULL, NULL, 'ALLOW', NULL, ?2)",
+        rusqlite::params![id, created_at],
     )
     .unwrap();
 }
@@ -245,7 +267,7 @@ fn the_receipts_screen_returns_every_egress_log_row() {
         .unwrap();
     }
 
-    let receipts = egress_receipts_core(&app).unwrap();
+    let receipts = egress_receipts_core(&app, first_page()).unwrap();
 
     assert_eq!(receipts.len(), 2);
     assert_eq!(receipts[0].id, "eg-2", "newest receipt first");
@@ -275,7 +297,178 @@ fn the_receipts_screen_returns_every_egress_log_row() {
 #[test]
 fn the_receipts_screen_is_empty_on_an_empty_store() {
     let app = test_app();
-    assert!(egress_receipts_core(&app).unwrap().is_empty());
+    assert!(egress_receipts_core(&app, first_page()).unwrap().is_empty());
+}
+
+#[test]
+fn receipts_pagination_walks_every_row_once_in_newest_first_order() {
+    let app = test_app();
+    {
+        let mut store = app.lock_store().unwrap();
+        let conn = store.conn();
+        // 450 rows: two full pages of 200 and a terminal page of 50. Every
+        // tenth row shares the previous row's millisecond, so the id
+        // tiebreaker is exercised, not just distinct timestamps.
+        for index in 0..450i64 {
+            let step = 450 - index + if index % 10 == 9 { 1 } else { 0 };
+            let created_at = format!(
+                "2026-09-25T{:02}:{:02}:{:02}.000Z",
+                step / 3600,
+                (step / 60) % 60,
+                step % 60
+            );
+            insert_receipt(conn, &format!("e_{index:04}"), &created_at);
+        }
+    }
+
+    let mut walked: Vec<ReceiptView> = Vec::new();
+    let mut page_lengths: Vec<usize> = Vec::new();
+    let mut cursor = first_page();
+    loop {
+        let page = egress_receipts_core(&app, cursor).unwrap();
+        let at_end = page.len() < RECEIPTS_PAGE_SIZE as usize;
+        page_lengths.push(page.len());
+        walked.extend(page);
+        if at_end {
+            break;
+        }
+        let last = walked.last().unwrap();
+        cursor = EgressReceiptsInput {
+            before_created_at: Some(last.created_at.clone()),
+            before_id: Some(last.id.clone()),
+        };
+    }
+
+    // No overlap, no gaps: the concatenation of pages is exactly the full
+    // newest-first order, and every page honors the bound.
+    let expected: Vec<String> = {
+        let mut store = app.lock_store().unwrap();
+        let conn = store.conn();
+        let mut statement = conn
+            .prepare("SELECT id FROM egress_log ORDER BY created_at DESC, id ASC")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let ids: Vec<String> = walked.into_iter().map(|view| view.id).collect();
+    assert_eq!(ids, expected, "the walk must cover every row exactly once");
+    assert_eq!(
+        page_lengths,
+        vec![200, 200, 50],
+        "two full pages, then the terminal page"
+    );
+}
+
+#[test]
+fn receipts_cursor_orders_rows_sharing_one_timestamp_by_id() {
+    let app = test_app();
+    {
+        let mut store = app.lock_store().unwrap();
+        let conn = store.conn();
+        for id in ["eg-a", "eg-b", "eg-c"] {
+            insert_receipt(conn, id, "2026-09-25T08:00:00.000Z");
+        }
+    }
+
+    // Newest first, ties broken by id ascending — exactly the index order,
+    // so a cursor that lands inside a tie never skips or repeats a row.
+    let page = egress_receipts_core(&app, first_page()).unwrap();
+    let ids: Vec<&str> = page.iter().map(|view| view.id.as_str()).collect();
+    assert_eq!(ids, ["eg-a", "eg-b", "eg-c"]);
+}
+
+#[test]
+fn receipts_cursor_returns_only_rows_older_than_the_cursor() {
+    let app = test_app();
+    {
+        let mut store = app.lock_store().unwrap();
+        let conn = store.conn();
+        for (id, created_at) in [
+            ("eg-newest", "2026-09-25T10:00:00.000Z"),
+            ("eg-middle", "2026-09-25T09:00:00.000Z"),
+            ("eg-oldest", "2026-09-25T08:00:00.000Z"),
+        ] {
+            insert_receipt(conn, id, created_at);
+        }
+    }
+
+    // Cursor on the newest row: exactly the older two, newest first.
+    let page = egress_receipts_core(
+        &app,
+        EgressReceiptsInput {
+            before_created_at: Some("2026-09-25T10:00:00.000Z".to_string()),
+            before_id: Some("eg-newest".to_string()),
+        },
+    )
+    .unwrap();
+    let ids: Vec<&str> = page.iter().map(|view| view.id.as_str()).collect();
+    assert_eq!(ids, ["eg-middle", "eg-oldest"]);
+}
+
+#[test]
+fn half_a_cursor_is_rejected_not_resolved() {
+    let app = test_app();
+    let half = EgressReceiptsInput {
+        before_created_at: Some("2026-09-25T10:00:00.000Z".to_string()),
+        before_id: None,
+    };
+    let error = egress_receipts_core(&app, half).unwrap_err();
+    assert!(
+        error.to_string().contains("cursor"),
+        "a half cursor is a validation error, not a page: {error}"
+    );
+}
+
+#[test]
+fn the_receipts_cursor_wire_names_are_camel_case() {
+    // The webview speaks serde camelCase (`beforeCreatedAt`); the Rust
+    // fields stay snake_case. A snake_case payload names no field serde
+    // knows — it deserializes to the cursor-less first page, which is why
+    // the frontend interface must use the camelCase spellings.
+    let cursor: EgressReceiptsInput = serde_json::from_value(serde_json::json!({
+        "beforeCreatedAt": "2026-09-25T10:00:00.000Z",
+        "beforeId": "eg-newest",
+    }))
+    .unwrap();
+    assert_eq!(
+        cursor.before_created_at.as_deref(),
+        Some("2026-09-25T10:00:00.000Z")
+    );
+    assert_eq!(cursor.before_id.as_deref(), Some("eg-newest"));
+
+    let first: EgressReceiptsInput = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(first.before_created_at, None);
+    assert_eq!(first.before_id, None);
+}
+
+#[test]
+fn the_daily_view_is_bounded_by_the_output_budget() {
+    let app = test_app();
+    {
+        let mut store = app.lock_store().unwrap();
+        let conn = store.conn();
+        seed_household(conn);
+        for (id, created_at) in [
+            ("rec-1", "2026-09-25T08:00:00.000Z"),
+            ("rec-2", "2026-09-25T09:00:00.000Z"),
+            ("rec-3", "2026-09-25T10:00:00.000Z"),
+            ("rec-4", "2026-09-25T11:00:00.000Z"),
+            ("rec-5", "2026-09-25T12:00:00.000Z"),
+        ] {
+            insert_recommendation(conn, id, "served", created_at);
+        }
+        insert_recommendation(conn, "rec-pending", "pending", "2026-09-25T13:00:00.000Z");
+    }
+
+    let served = daily_recommendations_core(&app).unwrap();
+
+    // The served query enforces the documented budget explicitly: three
+    // rows, newest first, even when the store holds more.
+    let ids: Vec<&str> = served.iter().map(|view| view.id.as_str()).collect();
+    assert_eq!(ids, ["rec-5", "rec-4", "rec-3"]);
 }
 
 // ──────────────────────── privacy_status ──────────────────────────
