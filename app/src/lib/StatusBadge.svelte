@@ -10,9 +10,24 @@
   };
 
   const variant = $derived(variants[status] ?? "status-badge--neutral");
+
+  // Human verdict for assistive tech: the visible text is terse gate
+  // jargon, so the accessible name carries the plain-English outcome.
+  // Unknown statuses fall back to the raw text rather than guessing.
+  const verdicts: Record<string, string> = {
+    ALLOW: "Allowed",
+    QUARANTINE: "Quarantined",
+    BLOCK: "Blocked",
+  };
+
+  const verdict = $derived(verdicts[status] ?? status);
 </script>
 
-<span class="status-badge {variant}" data-status={status}>{status}</span>
+<span
+  class="status-badge {variant}"
+  data-status={status}
+  role="status"
+  aria-label={`Privacy verdict: ${verdict}`}>{status}</span>
 
 <style>
   .status-badge {

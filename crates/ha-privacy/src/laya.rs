@@ -103,6 +103,11 @@ const LEAK_QUESTIONS: &[(&str, LeakClass, &str)] = &[
     ),
 ];
 
+// An edit that empties `LEAK_QUESTIONS` would leave the confidence fold in
+// `parse_predict_response` with nothing to trust — make that a compile
+// error instead of a runtime `expect` away from a crash.
+const _: () = assert!(!LEAK_QUESTIONS.is_empty(), "LEAK_QUESTIONS must not be empty");
+
 /// Why [`LayaSidecar::new`] refused a configuration.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LayaConfigError {

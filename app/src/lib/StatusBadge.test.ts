@@ -38,4 +38,25 @@ describe("StatusBadge", () => {
     expect(badge.className).toContain("status-badge--neutral");
     expect(badge.textContent).toBe("PENDING");
   });
+
+  it("exposes the human verdict to assistive tech", () => {
+    const cases: [string, string][] = [
+      ["ALLOW", "Allowed"],
+      ["QUARANTINE", "Quarantined"],
+      ["BLOCK", "Blocked"],
+      ["PENDING", "PENDING"],
+    ];
+
+    for (const [status, verdict] of cases) {
+      const { container, unmount } = render(StatusBadge, {
+        props: { status },
+      });
+      const badge = container.firstElementChild as HTMLElement;
+      expect(badge.getAttribute("role")).toBe("status");
+      expect(badge.getAttribute("aria-label")).toBe(
+        `Privacy verdict: ${verdict}`,
+      );
+      unmount();
+    }
+  });
 });
