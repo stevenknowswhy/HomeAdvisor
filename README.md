@@ -96,6 +96,22 @@ cargo clippy --workspace --all-targets -- -D warnings  # lint gate
 
 CI runs the same three on every push and pull request.
 
+### The leak-scan sidecar
+
+The privacy gate's semantic scan runs against upstream's `laya-serve` server
+on loopback — nothing ships in the app bundle, and CI never touches it. To
+run the real-sidecar smoke test locally:
+
+```sh
+pip install "laya[serve]==0.3.20"
+LAYA_HOST=127.0.0.1 LAYA_PORT=8000 LAYA_MODELS=english LAYA_PRELOAD=1 \
+  LAYA_DEVICE=cpu laya-serve    # mps on Apple Silicon; cpu is the documented tail
+```
+
+The pinned version, the runbook pins, and the fail-closed details live in
+[crates/ha-privacy/MANUAL-SMOKE.md](crates/ha-privacy/MANUAL-SMOKE.md) and
+[docs/threat-model.md](docs/threat-model.md).
+
 ### The desktop app's database key
 
 On macOS the app keeps its SQLCipher database key in the login Keychain

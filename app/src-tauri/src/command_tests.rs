@@ -14,7 +14,7 @@ use crate::commands::{
     PrivacyStatus, ReceiptView, RECEIPTS_PAGE_SIZE,
 };
 use crate::state::AppState;
-use crate::supervisor::{ExternalSidecar, SidecarSupervisor, SupervisionPolicy, TcpProbe};
+use crate::supervisor::{ExternalSidecar, HttpHealthProbe, SidecarSupervisor, SupervisionPolicy};
 
 fn test_key() -> StoreKey {
     StoreKey::from_passphrase("test-key").unwrap()
@@ -37,7 +37,7 @@ fn dead_sidecar() -> LayaSidecar {
 /// configured, with test-speed timings.
 pub(crate) fn external_supervisor_at(url: &str) -> SidecarSupervisor {
     SidecarSupervisor::with_policy(
-        Box::new(TcpProbe::new(url, Duration::from_millis(250))),
+        Box::new(HttpHealthProbe::new(url, Duration::from_millis(250))),
         Box::new(ExternalSidecar),
         SupervisionPolicy {
             start_timeout: Duration::from_secs(30),
@@ -479,7 +479,7 @@ fn privacy_status_reports_sidecar_unavailable_and_stays_fail_closed() {
     match privacy_status_core(app.supervisor(), app.sidecar().checkpoint()) {
         PrivacyStatus::SidecarUnavailable { detail } => {
             assert!(
-                detail.contains("not listening"),
+                detail.contains("could not reach the sidecar"),
                 "the detail should say what is wrong: {detail}"
             );
         }
@@ -487,19 +487,48 @@ fn privacy_status_reports_sidecar_unavailable_and_stays_fail_closed() {
     }
 }
 
-#[test]
-fn privacy_status_reports_protected_when_the_sidecar_listens() {
+/// A minimal `/health` responder: answers `GET /health` with the laya-serve
+/// healthy body so the HTTP probe reads `Healthy`. Under the TCP probe any
+/// open port read `Healthy`; readiness now needs an actual answer.
+fn healthy_sidecar() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(_) => break,
+            };
+            let mut buf = [0u8; 4096];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+            let body = "{\"status\":\"ok\"}";
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    url
+}
+
+#[test]
+fn privacy_status_reports_protected_when_the_sidecar_is_healthy() {
+    let base_url = healthy_sidecar();
     let sidecar = LayaSidecar::new(&base_url).unwrap();
     let supervisor = external_supervisor_at(&base_url);
-    // External mode: start probes the endpoint and lands on Healthy.
+    // External mode: start probes /health and lands on Healthy.
     supervisor.start();
 
     match privacy_status_core(&supervisor, sidecar.checkpoint()) {
         PrivacyStatus::Protected { checkpoint } => {
             assert_eq!(checkpoint, "convaiinnovations/laya");
         }
-        other => panic!("a listening sidecar must read as protected: {other:?}"),
+        other => panic!("a healthy sidecar must read as protected: {other:?}"),
     }
 }

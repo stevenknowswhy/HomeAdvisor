@@ -205,9 +205,9 @@ mod tests {
         ResearchPurpose::DomainResearch(Domain::Wealth)
     }
 
-    /// A canned `/predict` server on a random loopback port: clean scan
-    /// answers for all six leak classes, one request at a time. The
-    /// supervisor's TCP probes connect without sending; those are ignored.
+    /// A canned `/v1/systemone` server on a random loopback port: clean scan
+    /// answers for all six leak classes, one request at a time, plus the
+    /// `GET /health` answer the supervisor's `HttpHealthProbe` requires.
     struct CannedServer {
         url: String,
         stop: Arc<AtomicBool>,
@@ -230,17 +230,14 @@ mod tests {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
                             stream.set_nonblocking(false).unwrap();
-                            if read_http_request(&mut stream).is_some() {
-                                let body = canned_predict_response();
-                                let response = format!(
-                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                    body.len(),
-                                    body
-                                );
+                            if let Some(request) = read_http_request(&mut stream) {
+                                let response = if request.starts_with("GET /health") {
+                                    canned_health_response()
+                                } else {
+                                    http_ok(&canned_scan_response())
+                                };
                                 let _ = stream.write_all(response.as_bytes());
                             }
-                            // A probe connection sends nothing and is dropped.
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(Duration::from_millis(10));
@@ -271,8 +268,9 @@ mod tests {
     }
 
     /// Read one HTTP request: headers, then `Content-Length` bytes of body.
-    /// `None` when the peer sent nothing (a TCP probe, not a request).
-    fn read_http_request(stream: &mut TcpStream) -> Option<()> {
+    /// Returns the request text (headers included) so the caller can route
+    /// by path; `None` when the peer sent nothing at all.
+    fn read_http_request(stream: &mut TcpStream) -> Option<String> {
         let mut buffer = Vec::new();
         let mut byte = [0u8; 1];
         loop {
@@ -288,7 +286,7 @@ mod tests {
                 return None;
             }
         }
-        let headers = String::from_utf8_lossy(&buffer);
+        let headers = String::from_utf8_lossy(&buffer).into_owned();
         let content_length = headers
             .lines()
             .find_map(|line| {
@@ -301,12 +299,29 @@ mod tests {
         if content_length > 0 {
             stream.read_exact(&mut body).ok()?;
         }
-        Some(())
+        Some(headers)
+    }
+
+    /// The HTTP 200 wrapper both fixture servers use: headers plus a JSON
+    /// body, matching how the real sidecar answers.
+    fn http_ok(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    /// The `GET /health` response the supervisor's health probe requires to
+    /// report `Healthy` — laya-serve's healthy body.
+    fn canned_health_response() -> String {
+        http_ok("{\"status\":\"ok\"}")
     }
 
     /// A clean scan report for every leak class: nothing flagged, high
     /// confidence.
-    fn canned_predict_response() -> String {
+    fn canned_scan_response() -> String {
         let mut answers = serde_json::Map::new();
         for id in [
             "full_name",
@@ -334,7 +349,7 @@ mod tests {
     /// A supervisor in external mode watching the given endpoint.
     fn supervisor_for(url: &str) -> SidecarSupervisor {
         SidecarSupervisor::with_policy(
-            Box::new(crate::supervisor::TcpProbe::new(
+            Box::new(crate::supervisor::HttpHealthProbe::new(
                 url,
                 Duration::from_millis(250),
             )),
@@ -348,7 +363,7 @@ mod tests {
     /// the supervisor restarts it, and the next gated operation runs the
     /// normal pipeline to ALLOW.
     ///
-    /// The sidecar is real: a spawned child process serving `/predict` on a
+    /// The sidecar is real: a spawned child process serving `/v1/systemone` on a
     /// fixed loopback port (the `sidecar_helper_server` test below,
     /// re-executed as the supervised command). Killing it is a real stop.
     #[test]
@@ -368,7 +383,7 @@ mod tests {
         let mut store = store();
         let sidecar = LayaSidecar::new(&format!("http://127.0.0.1:{port}")).unwrap();
         let supervisor = SidecarSupervisor::with_policy(
-            Box::new(crate::supervisor::TcpProbe::new(
+            Box::new(crate::supervisor::HttpHealthProbe::new(
                 &format!("http://127.0.0.1:{port}"),
                 Duration::from_millis(250),
             )),
@@ -644,7 +659,7 @@ mod tests {
     }
 
     /// Helper test: re-executed as the supervised child process. Serves the
-    /// canned `/predict` response forever on the configured port; the parent
+    /// canned `/v1/systemone` response forever on the configured port; the parent
     /// kills it to simulate a sidecar stop.
     #[test]
     fn sidecar_helper_server() {
@@ -678,14 +693,12 @@ mod tests {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream.set_nonblocking(false).unwrap();
-                    if read_http_request(&mut stream).is_some() {
-                        let body = canned_predict_response();
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
-                        );
+                    if let Some(request) = read_http_request(&mut stream) {
+                        let response = if request.starts_with("GET /health") {
+                            canned_health_response()
+                        } else {
+                            http_ok(&canned_scan_response())
+                        };
                         let _ = stream.write_all(response.as_bytes());
                     }
                 }

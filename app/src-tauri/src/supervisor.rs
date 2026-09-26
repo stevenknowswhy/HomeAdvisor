@@ -184,15 +184,16 @@ pub trait HealthProbe: Send {
     fn probe(&self) -> Result<(), String>;
 }
 
-/// The production probe: a bounded TCP connect to the loopback endpoint the
-/// scan client is configured for — the same probe `state.rs` tests.
+/// The production probe: a bounded `GET /health` against the loopback sidecar
+/// — laya-serve's health endpoint, so a pass implies the checkpoints are
+/// loaded, not merely that a port is open. The same probe `state.rs` tests.
 #[derive(Debug, Clone)]
-pub struct TcpProbe {
+pub struct HttpHealthProbe {
     base_url: String,
     timeout: Duration,
 }
 
-impl TcpProbe {
+impl HttpHealthProbe {
     pub fn new(base_url: &str, timeout: Duration) -> Self {
         Self {
             base_url: base_url.to_string(),
@@ -201,7 +202,7 @@ impl TcpProbe {
     }
 }
 
-impl HealthProbe for TcpProbe {
+impl HealthProbe for HttpHealthProbe {
     fn probe(&self) -> Result<(), String> {
         probe_sidecar(&self.base_url, self.timeout)
     }
@@ -603,6 +604,29 @@ mod tests {
         );
         // Ticks keep reporting degraded: fail-closed.
         assert!(matches!(supervisor.tick(), SidecarState::Degraded { .. }));
+        assert!(supervisor.ensure_healthy().is_err());
+    }
+
+    /// The production probe against a real listening-but-hung endpoint — a
+    /// server that accepts connections and never answers. The TCP connect
+    /// probe this replaces read that as "port open" and reported `Healthy`
+    /// while every scan timed out into BLOCK; the `GET /health` probe times
+    /// out into a failure, and the machine must never read `Healthy`.
+    #[test]
+    fn a_listening_but_hung_sidecar_never_reads_healthy() {
+        let hung = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", hung.local_addr().unwrap());
+        let supervisor = SidecarSupervisor::with_policy(
+            Box::new(HttpHealthProbe::new(&url, Duration::from_millis(250))),
+            Box::new(ExternalSidecar),
+            fast_policy(),
+        );
+
+        let state = supervisor.start();
+        assert!(
+            matches!(&state, SidecarState::Degraded { detail, .. } if detail.contains("could not reach")),
+            "unexpected state: {state:?}"
+        );
         assert!(supervisor.ensure_healthy().is_err());
     }
 

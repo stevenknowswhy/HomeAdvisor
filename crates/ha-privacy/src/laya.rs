@@ -4,15 +4,19 @@
 //!
 //! Laya is a non-generative decision model that runs on-device: it answers
 //! typed questions about a text with calibrated probabilities in one forward
-//! pass, and nothing leaves the machine. The integration guide (brain dump 1)
-//! pins the contract this client implements:
+//! pass, and nothing leaves the machine. The sidecar is upstream's
+//! maintained `laya-serve` server (`pip install "laya[serve]"`, exact version
+//! pinned in `MANUAL-SMOKE.md`), which serves the Jev-compatible `POST
+//! /v1/systemone` wire protocol — the same `{"state", "questions"}` request
+//! and `answers`/`usage` response schema the demo server's `/predict` used.
+//! The contract this client implements:
 //!
-//! - `POST {base}/predict` with `{"state": <payload>, "questions": {...}}`.
+//! - `POST {base}{SCAN_PATH}` with `{"state": <payload>, "questions": {...}}`.
 //!   The state may be any JSON value and is passed through as-is.
-//! - The sidecar returns the predict result as JSON: `answers` keyed by
+//! - The sidecar returns the scan result as JSON: `answers` keyed by
 //!   question id, each `noul` answer carrying `noul` (P(true)) and
-//!   `confidence` (1 − normalized entropy), plus extra fields (`action`)
-//!   this client ignores.
+//!   `confidence` (1 − normalized entropy), plus extra fields (`action`,
+//!   the Router's `routing` metadata) this client ignores.
 //! - All questions in one call share a single forward pass, so the client
 //!   asks every leak class at once — one round trip per scan.
 //!
@@ -55,8 +59,13 @@ use serde_json::Value;
 
 use ha_core::{LeakClass, LeakScanner, ScanError, ScanReport};
 
+/// The path the scan is posted to: `laya-serve`'s Jev-compatible wire
+/// protocol, the endpoint upstream's maintained server answers. The
+/// request/response schema is identical to the demo server's `/predict`.
+const SCAN_PATH: &str = "/v1/systemone";
+
 /// The checkpoint the sidecar is expected to serve (the guide's English
-/// checkpoint). The `/predict` contract carries no model version, so the
+/// checkpoint). The wire contract carries no model version, so the
 /// client reports the checkpoint it was configured for — this is the
 /// `laya_model_version` recorded in egress receipts.
 pub const DEFAULT_CHECKPOINT: &str = "convaiinnovations/laya";
@@ -66,44 +75,100 @@ pub const DEFAULT_CHECKPOINT: &str = "convaiinnovations/laya";
 /// the gate.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The leak-scan question set: `(question id, leak class, wording)`, one
+/// The leak-scan question set: `(question id, leak class, question)`, one
 /// `noul` question per class, in [`LeakClass`] declaration order. The
-/// wordings are the user's sketch verbatim where the sketch has them.
-const LEAK_QUESTIONS: &[(&str, LeakClass, &str)] = &[
+/// instructions are the user's sketch verbatim where the sketch has them.
+///
+/// Every question carries the shape upstream documents for the English
+/// checkpoint's label-following failure (laya issue #156): the checkpoint
+/// can follow its option labels instead of the state and return a confident
+/// "no" for clearly positive input. The workaround asks with `criteria`
+/// keyed `true`/`false` — an explicit description of each outcome — and
+/// overrides the model-facing labels with neutral text (`A`/`B`, upstream
+/// README "Decision Primitives"), so the model scores the state against
+/// the criteria and cannot lean on a label's wording to a wrong answer.
+/// The returned `noul` value is P(true) regardless of the labels. A
+/// leak-scan "no" is the wrong-direction failure (a missed leak reads as
+/// clean), so the shape is load-bearing, not cosmetic.
+struct NoulQuestion {
+    instructions: &'static str,
+    criteria_true: &'static str,
+    criteria_false: &'static str,
+}
+
+/// The model-facing option labels, upstream's documented neutral override:
+/// distinct, non-empty, and free of any meaning the checkpoint could follow
+/// instead of the state.
+const NOUL_LABELS: (&str, &str) = ("A", "B"); // (true, false)
+
+const LEAK_QUESTIONS: &[(&str, LeakClass, NoulQuestion)] = &[
     (
         "full_name",
         LeakClass::FullName,
-        "Does this text contain any real first or last names of family members?",
+        NoulQuestion {
+            instructions: "Does this text contain any real first or last names of family members?",
+            criteria_true: "the text contains real first or last names of family members",
+            criteria_false: "the text contains no real first or last names of family members",
+        },
     ),
     (
         "exact_dob",
         LeakClass::ExactDob,
-        "Does this text contain a person's exact date of birth?",
+        NoulQuestion {
+            instructions: "Does this text contain a person's exact date of birth?",
+            criteria_true: "the text contains a person's exact date of birth",
+            criteria_false: "the text contains no person's exact date of birth",
+        },
     ),
     (
         "named_place",
         LeakClass::NamedPlace,
-        "Does this text contain a specific school name or other named place that could identify the family?",
+        NoulQuestion {
+            instructions:
+                "Does this text contain a specific school name or other named place that could identify the family?",
+            criteria_true:
+                "the text contains a specific school name or other named place that could identify the family",
+            criteria_false:
+                "the text contains no specific school name or other named place that could identify the family",
+        },
     ),
     (
         "street_address",
         LeakClass::StreetAddress,
-        "Does this text contain exact street addresses or GPS data?",
+        NoulQuestion {
+            instructions: "Does this text contain exact street addresses or GPS data?",
+            criteria_true: "the text contains exact street addresses or GPS data",
+            criteria_false: "the text contains no exact street addresses and no GPS data",
+        },
     ),
     (
         "gov_id",
         LeakClass::GovId,
-        "Does this text contain raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures?",
+        NoulQuestion {
+            instructions:
+                "Does this text contain raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures?",
+            criteria_true:
+                "the text contains raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures",
+            criteria_false:
+                "the text contains no raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures",
+        },
     ),
     (
         "unique_combination",
         LeakClass::UniqueCombination,
-        "Even if no single field is identifying, do these fields together single out one specific family, such as an exact age with a small town and an occupation?",
+        NoulQuestion {
+            instructions:
+                "Even if no single field is identifying, do these fields together single out one specific family, such as an exact age with a small town and an occupation?",
+            criteria_true:
+                "even if no single field is identifying, these fields together single out one specific family, such as an exact age with a small town and an occupation",
+            criteria_false:
+                "even if no single field is identifying, these fields together do not single out any one specific family",
+        },
     ),
 ];
 
 // An edit that empties `LEAK_QUESTIONS` would leave the confidence fold in
-// `parse_predict_response` with nothing to trust — make that a compile
+// `parse_scan_response` with nothing to trust — make that a compile
 // error instead of a runtime `expect` away from a crash.
 const _: () = assert!(
     !LEAK_QUESTIONS.is_empty(),
@@ -178,7 +243,7 @@ fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
 
 impl LeakScanner for LayaSidecar {
     fn scan(&self, payload: &Value) -> Result<ScanReport, ScanError> {
-        let url = format!("{}/predict", self.base_url);
+        let url = format!("{}{SCAN_PATH}", self.base_url);
         let mut response = self
             .agent
             .post(&url)
@@ -194,7 +259,7 @@ impl LeakScanner for LayaSidecar {
         let body = response.body_mut().read_to_string().map_err(|error| {
             ScanError::Unavailable(format!("could not read the sidecar response: {error}"))
         })?;
-        parse_predict_response(&body)
+        parse_scan_response(&body)
     }
 }
 
@@ -212,8 +277,54 @@ fn transport_error(url: &str, error: ureq::Error) -> ScanError {
     }
 }
 
-/// The `/predict` request body: the payload as `state`, all leak questions
-/// at once — one forward pass per scan.
+/// The `GET /health` probe the supervisor's health loop runs against the
+/// sidecar — laya-serve's health endpoint. A 200 whose body carries
+/// `"status": "ok"` is the only thing that counts as healthy: with
+/// `LAYA_PRELOAD=1` the server loads its checkpoints before it starts
+/// listening, so a healthy `/health` implies a sidecar ready to scan.
+///
+/// This replaced a bare TCP connect probe, which could only see "port
+/// open" — a listening-but-hung sidecar read as `Healthy` while every scan
+/// timed out into BLOCK. Fail-closed behavior was never wrong either way;
+/// this fixes the status display, not the gate.
+///
+/// Errors carry the probe's complaint verbatim for the supervisor's
+/// degraded-state detail.
+pub fn probe_health(base_url: &str, timeout: Duration) -> Result<(), String> {
+    if !is_loopback_url(base_url) {
+        return Err(format!(
+            "laya sidecar URL must be loopback (localhost, 127.0.0.0/8, or [::1]); got {base_url:?}"
+        ));
+    }
+    let url = format!("{}/health", base_url.trim_end_matches('/'));
+    let agent = agent_with_timeout(timeout);
+    let mut response = agent.get(&url).call().map_err(|error| match error {
+        ureq::Error::StatusCode(status) => {
+            format!("sidecar at {url} returned HTTP {status}")
+        }
+        transport => format!("could not reach the sidecar at {url}: {transport}"),
+    })?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("could not read the sidecar health response: {error}"))?;
+    let health: Value = serde_json::from_str(body.trim())
+        .map_err(|error| format!("sidecar health response is not JSON: {error}"))?;
+    if health.get("status").and_then(Value::as_str) == Some("ok") {
+        Ok(())
+    } else {
+        Err(format!(
+            "sidecar at {url} is not ready: status is {}, not \"ok\"",
+            health
+                .get("status")
+                .map(Value::to_string)
+                .unwrap_or_else(|| "<missing>".to_string())
+        ))
+    }
+}
+
+/// The `/v1/systemone` request body: the payload as `state`, all leak
+/// questions at once — one forward pass per scan.
 fn predict_body(payload: &Value) -> Value {
     serde_json::json!({
         "state": payload,
@@ -222,18 +333,27 @@ fn predict_body(payload: &Value) -> Value {
 }
 
 fn leak_questions() -> Value {
+    let (label_true, label_false) = NOUL_LABELS;
     let mut questions = serde_json::Map::new();
-    for (id, _, instructions) in LEAK_QUESTIONS {
+    for (id, _, question) in LEAK_QUESTIONS {
         questions.insert(
             id.to_string(),
-            serde_json::json!({ "type": "noul", "instructions": instructions }),
+            serde_json::json!({
+                "type": "noul",
+                "instructions": question.instructions,
+                "criteria": {
+                    "true": question.criteria_true,
+                    "false": question.criteria_false,
+                },
+                "labels": { "true": label_true, "false": label_false },
+            }),
         );
     }
     Value::Object(questions)
 }
 
 #[derive(Deserialize)]
-struct PredictResponse {
+struct ScanResponse {
     answers: HashMap<String, LayaAnswer>,
 }
 
@@ -245,7 +365,7 @@ struct LayaAnswer {
     confidence: f64,
 }
 
-/// Parse a `/predict` response body into a [`ScanReport`].
+/// Parse a `/v1/systemone` response body into a [`ScanReport`].
 ///
 /// Trustworthiness rules (each failing closed as
 /// [`ScanError::MalformedReport`]):
@@ -260,11 +380,14 @@ struct LayaAnswer {
 /// Error details quote only structural facts, never body content: a
 /// misbehaving sidecar can be made to echo the payload, and the detail
 /// lands in the egress receipt.
-fn parse_predict_response(body: &str) -> Result<ScanReport, ScanError> {
+fn parse_scan_response(body: &str) -> Result<ScanReport, ScanError> {
     let malformed = |detail: String| ScanError::MalformedReport(detail);
 
-    let parsed: PredictResponse = serde_json::from_str(body)
-        .map_err(|error| malformed(format!("sidecar response is not a predict result: {error}")))?;
+    let parsed: ScanResponse = serde_json::from_str(body).map_err(|error| {
+        malformed(format!(
+            "sidecar response is not a systemone result: {error}"
+        ))
+    })?;
 
     let mut per_class = Vec::with_capacity(LEAK_QUESTIONS.len());
     let mut confidence: Option<f64> = None;
@@ -342,6 +465,112 @@ fn is_loopback_url(url: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// A one-response HTTP listener for probe tests: accepts connections,
+    /// and answers each with `body` under HTTP 200 — or, when `body` is
+    /// `None`, accepts and never answers (the hung sidecar the old TCP
+    /// probe mistook for healthy).
+    struct HealthMock {
+        url: String,
+        keep_going: Arc<AtomicBool>,
+    }
+
+    impl HealthMock {
+        fn answering(body: &str) -> Self {
+            Self::start(Some(body.to_string()))
+        }
+
+        fn hung() -> Self {
+            Self::start(None)
+        }
+
+        fn start(body: Option<String>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let keep_going = Arc::new(AtomicBool::new(true));
+            let flag = keep_going.clone();
+            std::thread::spawn(move || {
+                listener.set_nonblocking(true).unwrap();
+                while flag.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            stream.set_nonblocking(false).unwrap();
+                            // Read whatever arrived; a probe is tiny and
+                            // lands in one segment. Not read to parse —
+                            // just to give the client's write somewhere
+                            // to go before we answer (or don't).
+                            let mut buf = [0u8; 4096];
+                            let _ = stream.read(&mut buf);
+                            if let Some(body) = &body {
+                                let response = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                );
+                                let _ = stream.write_all(response.as_bytes());
+                            }
+                            // Without a body the stream is dropped, but the
+                            // probe has its timeout either way.
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self { url, keep_going }
+        }
+    }
+
+    impl Drop for HealthMock {
+        fn drop(&mut self) {
+            self.keep_going.store(false, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn a_health_probe_accepts_an_ok_sidecar() {
+        let mock = HealthMock::answering("{\"status\":\"ok\"}");
+        assert!(probe_health(&mock.url, Duration::from_millis(750)).is_ok());
+    }
+
+    #[test]
+    fn a_health_probe_rejects_a_not_ok_sidecar() {
+        // A sidecar that is up but reports it is not ready is not healthy —
+        // and "not ready" is the fail-closed direction to err toward.
+        let mock = HealthMock::answering("{\"status\":\"starting\",\"loaded\":[]}");
+        let detail = probe_health(&mock.url, Duration::from_millis(750)).unwrap_err();
+        assert!(detail.contains("not ready"), "detail: {detail}");
+    }
+
+    #[test]
+    fn a_health_probe_rejects_a_non_json_body() {
+        let mock = HealthMock::answering("<html>up</html>");
+        let detail = probe_health(&mock.url, Duration::from_millis(750)).unwrap_err();
+        assert!(detail.contains("not JSON"), "detail: {detail}");
+    }
+
+    #[test]
+    fn a_health_probe_rejects_a_listening_but_hung_sidecar() {
+        // The failure mode the old TCP connect probe could not see: the
+        // port is open, the server never answers, so "port open" meant
+        // nothing about readiness. The probe must time out into an error.
+        let mock = HealthMock::hung();
+        let detail = probe_health(&mock.url, Duration::from_millis(250)).unwrap_err();
+        assert!(detail.contains("could not reach"), "detail: {detail}");
+    }
+
+    #[test]
+    fn a_health_probe_demands_a_loopback_url() {
+        let detail = probe_health("http://example.com", Duration::from_millis(750)).unwrap_err();
+        assert!(detail.contains("loopback"), "detail: {detail}");
+    }
 
     fn predict_response(overrides: Value) -> String {
         // The guide's response shape: answers keyed by question id, each
@@ -373,10 +602,62 @@ mod tests {
         assert_eq!(body["state"], payload);
         let questions = body["questions"].as_object().unwrap();
         assert_eq!(questions.len(), LEAK_QUESTIONS.len());
-        for (id, _, instructions) in LEAK_QUESTIONS {
+        for (id, _, expected) in LEAK_QUESTIONS {
             let question = questions.get(*id).unwrap();
             assert_eq!(question["type"], "noul");
-            assert_eq!(question["instructions"], *instructions);
+            assert_eq!(question["instructions"], expected.instructions);
+            assert_eq!(question["criteria"]["true"], expected.criteria_true);
+            assert_eq!(question["criteria"]["false"], expected.criteria_false);
+            assert_eq!(question["labels"]["true"], NOUL_LABELS.0);
+            assert_eq!(question["labels"]["false"], NOUL_LABELS.1);
+        }
+    }
+    /// AC3: the question-shape pin. Upstream issue #156 — the English
+    /// checkpoint can follow its option labels and return a confident
+    /// false negative, the one wrong-direction failure a leak scan can
+    /// make. Every question must carry the documented workaround: criteria
+    /// keyed `true`/`false` describing each outcome, and a `labels`
+    /// override with exactly the two distinct, non-empty neutral texts.
+    #[test]
+    fn every_leak_question_pins_the_issue_156_workaround_shape() {
+        let questions = leak_questions();
+        let questions = questions.as_object().unwrap();
+        assert_eq!(questions.len(), 6, "one question per leak class");
+        for (id, _, _) in LEAK_QUESTIONS {
+            let question = questions.get(*id).unwrap();
+            assert_eq!(question["type"], "noul", "question `{id}`");
+            assert!(
+                !question["instructions"].as_str().unwrap().trim().is_empty(),
+                "question `{id}` has instructions"
+            );
+            let criteria = question["criteria"]
+                .as_object()
+                .unwrap_or_else(|| panic!("question `{id}` must carry criteria keyed true/false"));
+            assert_eq!(criteria.len(), 2, "question `{id}` criteria keys");
+            for key in ["true", "false"] {
+                assert!(
+                    !criteria[key].as_str().unwrap_or_default().trim().is_empty(),
+                    "question `{id}` criteria.{key} must be a non-empty description"
+                );
+            }
+            let labels = question["labels"]
+                .as_object()
+                .unwrap_or_else(|| panic!("question `{id}` must carry the labels override"));
+            assert_eq!(
+                labels.keys().collect::<Vec<_>>(),
+                vec!["false", "true"],
+                "question `{id}` labels must be exactly true/false"
+            );
+            for key in ["true", "false"] {
+                assert!(
+                    !labels[key].as_str().unwrap_or_default().trim().is_empty(),
+                    "question `{id}` labels.{key} must be non-empty"
+                );
+            }
+            assert_ne!(
+                labels["true"], labels["false"],
+                "question `{id}` labels must be distinct"
+            );
         }
     }
 
@@ -388,7 +669,7 @@ mod tests {
         body["answers"]["street_address"]["noul"] = json!(0.0);
         body["answers"]["street_address"]["confidence"] = json!(0.95);
 
-        let report = parse_predict_response(&body.to_string()).unwrap();
+        let report = parse_scan_response(&body.to_string()).unwrap();
 
         let full_name = report
             .per_class
@@ -413,7 +694,7 @@ mod tests {
         let body = predict_response(json!({ "gov_id": Value::Null }));
         // A null answer fails deserialization — still untrustworthy either way.
         assert!(matches!(
-            parse_predict_response(&body),
+            parse_scan_response(&body),
             Err(ScanError::MalformedReport(_))
         ));
 
@@ -422,7 +703,7 @@ mod tests {
         let mut root = serde_json::from_str::<Value>(&predict_response(Value::Null)).unwrap();
         root["answers"].as_object_mut().unwrap().remove("exact_dob");
         assert!(matches!(
-            parse_predict_response(&root.to_string()),
+            parse_scan_response(&root.to_string()),
             Err(ScanError::MalformedReport(detail)) if detail.contains("exact_dob"),
         ));
     }
@@ -438,7 +719,7 @@ mod tests {
             let body = predict_response(json!({ id: { "noul": value, "confidence": 0.9 } }));
             assert!(
                 matches!(
-                    parse_predict_response(&body),
+                    parse_scan_response(&body),
                     Err(ScanError::MalformedReport(_))
                 ),
                 "expected {value} to be rejected"
@@ -447,7 +728,7 @@ mod tests {
         let low_confidence =
             predict_response(json!({ "full_name": { "noul": 0.1, "confidence": 1.2 } }));
         assert!(matches!(
-            parse_predict_response(&low_confidence),
+            parse_scan_response(&low_confidence),
             Err(ScanError::MalformedReport(_))
         ));
     }
@@ -455,11 +736,11 @@ mod tests {
     #[test]
     fn a_non_json_body_is_malformed() {
         assert!(matches!(
-            parse_predict_response("<html>gateway error</html>"),
+            parse_scan_response("<html>gateway error</html>"),
             Err(ScanError::MalformedReport(_))
         ));
         assert!(matches!(
-            parse_predict_response(""),
+            parse_scan_response(""),
             Err(ScanError::MalformedReport(_))
         ));
     }

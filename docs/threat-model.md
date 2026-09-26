@@ -105,7 +105,9 @@ principal. The workspace additionally forbids `unsafe` code (`unsafe_code =
 
 ### 2. Laya leak-scan — loopback by construction
 
-The semantic scan runs as a local sidecar process; the client
+The semantic scan runs as a local `laya-serve` sidecar process (upstream's
+maintained server, pinned to an exact version in
+`crates/ha-privacy/MANUAL-SMOKE.md`); the client
 (`crates/ha-privacy/src/laya.rs`) is the only network client in the workspace.
 
 - The sidecar URL is **loopback-only by construction**: the constructor rejects
@@ -114,8 +116,11 @@ The semantic scan runs as a local sidecar process; the client
   client cannot be pointed at a cloud endpoint even by mistake.
 - The payload the sidecar sees is **Layer 1 output** — generalized bands, never
   raw family data. The checker sees the already-redacted form.
-- One `POST /predict` per scan, all six leak classes in one forward pass, 5 s
-  timeout so a hung sidecar blocks egress instead of stalling the gate.
+- One `POST /v1/systemone` per scan, all six leak classes in one forward pass,
+  5 s timeout so a hung sidecar blocks egress instead of stalling the gate.
+- The supervisor's readiness probe is a bounded `GET /health` round trip —
+  not a bare TCP connect — so a listening-but-hung sidecar cannot display
+  `Healthy` while every scan times out into BLOCK.
 - Failure mapping is fail-closed: unreachable, timed out, non-200, unparseable,
   or probabilities outside `0..=1` (a NaN must never reach the router, where
   `NaN > threshold` is false and a leak would read as clean) → `ScanError` →
@@ -130,9 +135,11 @@ itself — the send step still requires an ALLOW from the gate.
 
 The sidecar's model checkpoint (`convaiinnovations/laya`, ~650 MB–2.3 GB) is
 fetched from the Hugging Face Hub on first load — **by the user**, **by the
-sidecar's own Python process**, never by the app binary and never on CI
-(`crates/ha-privacy/MANUAL-SMOKE.md`). The app performs no model download; there
-is no code path in the workspace that fetches model weights.
+`laya-serve` sidecar's own Python process**, never by the app binary and never
+on CI (`crates/ha-privacy/MANUAL-SMOKE.md`; the runbook pins
+`LAYA_MODELS=english` so exactly one checkpoint is fetched). The app performs
+no model download; there is no code path in the workspace that fetches model
+weights.
 
 **Residual risk:** the download itself is an outbound request (to
 huggingface.co) that a network observer can see. It carries family data only if

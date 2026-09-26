@@ -8,23 +8,21 @@
 //! supervisor. Nothing here is serializable or clonable into the webview
 //! on purpose.
 
-use std::net::TcpStream;
-use std::net::ToSocketAddrs;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use ha_privacy::LayaSidecar;
+use ha_privacy::{probe_health, LayaSidecar};
 use ha_store::Store;
 use tauri::Manager as _;
 
 use crate::commands::AppError;
 use crate::supervisor::{
-    CommandSpawner, ExternalSidecar, HealthProbe, SidecarSpawner, SidecarSupervisor,
-    SupervisionPolicy, TcpProbe, HEALTH_CHECK_INTERVAL,
+    CommandSpawner, ExternalSidecar, HealthProbe, HttpHealthProbe, SidecarSpawner,
+    SidecarSupervisor, SupervisionPolicy, HEALTH_CHECK_INTERVAL,
 };
 
-/// How long the privacy-status probe waits for the sidecar to accept a
-/// connection before declaring it unavailable. Bounded and short: the probe
+/// How long the privacy-status probe waits for the sidecar's `/health`
+/// answer before declaring it unavailable. Bounded and short: the probe
 /// must never be the slow thing a user notices.
 pub(crate) const SIDECAR_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
@@ -90,7 +88,12 @@ impl AppState {
 ///   the health probe target (default: [`DEFAULT_SIDECAR_URL`]).
 /// - `HOMEADVISOR_SIDECAR_COMMAND` — when set, the app spawns that command
 ///   as the sidecar and restarts it when it dies or stops answering
-///   (supervised mode). When unset, the sidecar is managed outside the app
+///   (supervised mode). The documented sidecar is upstream's `laya-serve`
+///   (`pip install "laya[serve]"`, exact version pinned in
+///   `crates/ha-privacy/MANUAL-SMOKE.md`). The child inherits this process's
+///   environment, so launch it with the runbook's pins — `LAYA_HOST=127.0.0.1`
+///   is the security-relevant one, because laya-serve's bare-metal default
+///   binds `0.0.0.0`. When unset, the sidecar is managed outside the app
 ///   (external mode): the supervisor probes and reports but cannot respawn.
 ///   Either way, fail-closed is the contract.
 ///
@@ -155,7 +158,8 @@ pub fn open_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error
         }
         _ => Box::new(ExternalSidecar),
     };
-    let probe: Box<dyn HealthProbe> = Box::new(TcpProbe::new(&sidecar_url, SIDECAR_PROBE_TIMEOUT));
+    let probe: Box<dyn HealthProbe> =
+        Box::new(HttpHealthProbe::new(&sidecar_url, SIDECAR_PROBE_TIMEOUT));
     let supervisor = SidecarSupervisor::with_policy(probe, spawner, SupervisionPolicy::default());
 
     let state = AppState::new(store, sidecar, supervisor);
@@ -167,26 +171,31 @@ pub fn open_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error
     Ok(state)
 }
 
-/// Is the sidecar reachable right now?
+/// Is the sidecar healthy right now?
 ///
-/// A bounded TCP connect — a probe, not a scan: it costs no forward pass and
-/// answers exactly one question, "is something listening on the loopback
-/// endpoint the scan client is configured for". The real scan pipeline
-/// (and its failure mapping) is tested in `ha-privacy`.
+/// A bounded `GET /health` — a probe, not a scan: it costs no forward pass
+/// and answers exactly one question, "is the laya-serve sidecar answering
+/// with its checkpoints loaded". A listening-but-hung sidecar — the failure
+/// mode the TCP connect probe this replaced could not see — times out here
+/// like any other unavailability. The real scan pipeline (and its failure
+/// mapping) is tested in `ha-privacy`.
 pub fn probe_sidecar(base_url: &str, timeout: Duration) -> Result<(), String> {
+    require_explicit_port(base_url)?;
+    probe_health(base_url, timeout)
+}
+
+/// A URL without an explicit port is a configuration error: the probe
+/// guesses nothing about which port a sidecar process picked (and probing
+/// port 80 by accident would be a lie).
+fn require_explicit_port(base_url: &str) -> Result<(), String> {
     let host_port = endpoint(base_url)?;
-    let addrs: Vec<_> = match host_port.to_socket_addrs() {
-        Ok(addrs) => addrs.collect(),
-        Err(error) => return Err(format!("could not resolve {host_port}: {error}")),
-    };
-    for address in addrs {
-        if TcpStream::connect_timeout(&address, timeout).is_ok() {
-            return Ok(());
-        }
+    let port = host_port.rsplit_once(':').map(|(_, port)| port);
+    if port.map(|port| port.parse::<u16>().is_ok()) != Some(true) {
+        return Err(format!(
+            "{base_url} has no explicit port — the probe guesses nothing about which port a sidecar picked"
+        ));
     }
-    Err(format!(
-        "the sidecar at {base_url} is not listening — gated operations stay BLOCKED"
-    ))
+    Ok(())
 }
 
 /// Extract `host:port` from a loopback URL like `http://127.0.0.1:8000`.
@@ -208,11 +217,42 @@ fn endpoint(base_url: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_probe_reaches_a_listening_loopback_port() {
+    /// A minimal `/health` responder: accepts connections and answers each
+    /// with laya-serve's healthy body. Returns the base URL to probe.
+    fn healthy_sidecar() -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base_url = format!("http://{}", listener.local_addr().unwrap());
-        assert!(probe_sidecar(&base_url, Duration::from_millis(250)).is_ok());
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = match stream {
+                    Ok(stream) => stream,
+                    Err(_) => break,
+                };
+                // Read whatever arrived; a probe is tiny and lands in one
+                // segment. Not read to parse — just to give the client's
+                // write somewhere to go before the answer.
+                let mut buf = [0u8; 4096];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                let body = "{\"status\":\"ok\"}";
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn the_probe_reaches_a_healthy_loopback_sidecar() {
+        let base_url = healthy_sidecar();
+        assert!(probe_sidecar(&base_url, Duration::from_millis(750)).is_ok());
     }
 
     #[test]
@@ -224,15 +264,15 @@ mod tests {
         let base_url = format!("http://127.0.0.1:{port}");
         let detail = probe_sidecar(&base_url, Duration::from_millis(250)).unwrap_err();
         assert!(
-            detail.contains("not listening"),
+            detail.contains("could not reach the sidecar"),
             "unexpected detail: {detail}"
         );
     }
 
     #[test]
     fn the_probe_requires_an_explicit_port() {
-        // A portless URL must fail; which resolver complaint it raises is
-        // not part of the contract.
+        // A portless URL must fail — an accidental probe of port 80 would
+        // be a lie; which resolver complaint it raises is not the contract.
         assert!(probe_sidecar("http://127.0.0.1", Duration::from_millis(250)).is_err());
     }
 
