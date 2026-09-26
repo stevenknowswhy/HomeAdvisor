@@ -10,10 +10,15 @@
 /// Crate version, exported for the CLI banner and diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod bands;
 pub mod dimension;
 pub mod goal;
 pub mod policy;
+pub mod recommendation;
 
+pub use bands::{
+    AgeBand, BandedMember, BandedProfile, IncomeBand, MemberRole, RegionClass, SchoolStage,
+};
 pub use dimension::{Dimension, ExternalHandling, Generalizer, Sensitivity};
 pub use goal::{
     Domain, Goal, GoalId, GoalRelationship, GoalStatus, MemberId, RelationshipKind, Timeframe,
@@ -21,6 +26,9 @@ pub use goal::{
 pub use policy::{
     BlockReason, Decision, Gate, LeakClass, LeakScanner, OutboundContext, PolicyConfig,
     PolicyError, ResearchPurpose, ScanError, ScanReport,
+};
+pub use recommendation::{
+    EvidenceCitation, EvidenceSource, Recommendation, RecommendationStatus, RecommendationType,
 };
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ members = [
     "crates/ha-core",
     "crates/ha-store",
     "crates/ha-privacy",
+    "crates/ha-packs",
     "crates/ha-cli",
     "app/src-tauri",
 ]

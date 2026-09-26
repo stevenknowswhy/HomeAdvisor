@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "pack": { "id": "education", "version": "1.0.0" },
+  "rules": [
+    {
+      "id": "education.fafsa-window-open",
+      "title": "The FAFSA is open",
+      "body": "Filing early improves aid odds. The federal window closes June 30.",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "Federal Student Aid",
+          "citation": "studentaid.gov, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": { "age_band_children": ["age_16_17", "age_18_24"] },
+        "window": { "kind": "annual", "opens": "--10-01", "closes": "--06-30" }
+      },
+      "notify": { "ladder": "morning", "nudge_days_before_close": [14, 2] }
+    },
+    {
+      "id": "education.kindergarten-registration",
+      "title": "Kindergarten registration season",
+      "body": "Most districts open kindergarten registration in late winter for a fall start, and dates are set locally — check your district's calendar this month.",
+      "evidence": [
+        {
+          "source": "professional_association",
+          "label": "Education Commission of the States",
+          "citation": "ECS state kindergarten entry policies, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": { "age_band_children": ["age_3_5"] },
+        "window": { "kind": "annual", "opens": "--02-01", "closes": "--04-30" }
+      },
+      "notify": { "ladder": "morning" }
+    },
+    {
+      "id": "education.psat-season",
+      "title": "PSAT season for juniors",
+      "body": "The PSAT is given each October — the National Merit qualifier and a dry run for the SAT. Registration runs through the school, usually by early fall.",
+      "evidence": [
+        {
+          "source": "professional_association",
+          "label": "College Board",
+          "citation": "College Board PSAT and SAT test calendars, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": { "age_band_children": ["age_16_17"] },
+        "window": { "kind": "annual", "opens": "--09-01", "closes": "--10-31" }
+      },
+      "notify": { "ladder": "morning" }
+    }
+  ]
+}
