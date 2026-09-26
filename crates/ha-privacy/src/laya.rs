@@ -4,15 +4,19 @@
 //!
 //! Laya is a non-generative decision model that runs on-device: it answers
 //! typed questions about a text with calibrated probabilities in one forward
-//! pass, and nothing leaves the machine. The integration guide (brain dump 1)
-//! pins the contract this client implements:
+//! pass, and nothing leaves the machine. The sidecar is upstream's
+//! maintained `laya-serve` server (`pip install "laya[serve]"`, exact version
+//! pinned in `MANUAL-SMOKE.md`), which serves the Jev-compatible `POST
+//! /v1/systemone` wire protocol — the same `{"state", "questions"}` request
+//! and `answers`/`usage` response schema the demo server's `/predict` used.
+//! The contract this client implements:
 //!
-//! - `POST {base}/predict` with `{"state": <payload>, "questions": {...}}`.
+//! - `POST {base}{SCAN_PATH}` with `{"state": <payload>, "questions": {...}}`.
 //!   The state may be any JSON value and is passed through as-is.
-//! - The sidecar returns the predict result as JSON: `answers` keyed by
+//! - The sidecar returns the scan result as JSON: `answers` keyed by
 //!   question id, each `noul` answer carrying `noul` (P(true)) and
-//!   `confidence` (1 − normalized entropy), plus extra fields (`action`)
-//!   this client ignores.
+//!   `confidence` (1 − normalized entropy), plus extra fields (`action`,
+//!   the Router's `routing` metadata) this client ignores.
 //! - All questions in one call share a single forward pass, so the client
 //!   asks every leak class at once — one round trip per scan.
 //!
@@ -55,8 +59,13 @@ use serde_json::Value;
 
 use ha_core::{LeakClass, LeakScanner, ScanError, ScanReport};
 
+/// The path the scan is posted to: `laya-serve`'s Jev-compatible wire
+/// protocol, the endpoint upstream's maintained server answers. The
+/// request/response schema is identical to the demo server's `/predict`.
+const SCAN_PATH: &str = "/v1/systemone";
+
 /// The checkpoint the sidecar is expected to serve (the guide's English
-/// checkpoint). The `/predict` contract carries no model version, so the
+/// checkpoint). The wire contract carries no model version, so the
 /// client reports the checkpoint it was configured for — this is the
 /// `laya_model_version` recorded in egress receipts.
 pub const DEFAULT_CHECKPOINT: &str = "convaiinnovations/laya";
@@ -103,7 +112,7 @@ const LEAK_QUESTIONS: &[(&str, LeakClass, &str)] = &[
 ];
 
 // An edit that empties `LEAK_QUESTIONS` would leave the confidence fold in
-// `parse_predict_response` with nothing to trust — make that a compile
+// `parse_scan_response` with nothing to trust — make that a compile
 // error instead of a runtime `expect` away from a crash.
 const _: () = assert!(
     !LEAK_QUESTIONS.is_empty(),
@@ -178,7 +187,7 @@ fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
 
 impl LeakScanner for LayaSidecar {
     fn scan(&self, payload: &Value) -> Result<ScanReport, ScanError> {
-        let url = format!("{}/predict", self.base_url);
+        let url = format!("{}{SCAN_PATH}", self.base_url);
         let mut response = self
             .agent
             .post(&url)
@@ -194,7 +203,7 @@ impl LeakScanner for LayaSidecar {
         let body = response.body_mut().read_to_string().map_err(|error| {
             ScanError::Unavailable(format!("could not read the sidecar response: {error}"))
         })?;
-        parse_predict_response(&body)
+        parse_scan_response(&body)
     }
 }
 
@@ -212,8 +221,8 @@ fn transport_error(url: &str, error: ureq::Error) -> ScanError {
     }
 }
 
-/// The `/predict` request body: the payload as `state`, all leak questions
-/// at once — one forward pass per scan.
+/// The `/v1/systemone` request body: the payload as `state`, all leak
+/// questions at once — one forward pass per scan.
 fn predict_body(payload: &Value) -> Value {
     serde_json::json!({
         "state": payload,
@@ -233,7 +242,7 @@ fn leak_questions() -> Value {
 }
 
 #[derive(Deserialize)]
-struct PredictResponse {
+struct ScanResponse {
     answers: HashMap<String, LayaAnswer>,
 }
 
@@ -245,7 +254,7 @@ struct LayaAnswer {
     confidence: f64,
 }
 
-/// Parse a `/predict` response body into a [`ScanReport`].
+/// Parse a `/v1/systemone` response body into a [`ScanReport`].
 ///
 /// Trustworthiness rules (each failing closed as
 /// [`ScanError::MalformedReport`]):
@@ -260,11 +269,12 @@ struct LayaAnswer {
 /// Error details quote only structural facts, never body content: a
 /// misbehaving sidecar can be made to echo the payload, and the detail
 /// lands in the egress receipt.
-fn parse_predict_response(body: &str) -> Result<ScanReport, ScanError> {
+fn parse_scan_response(body: &str) -> Result<ScanReport, ScanError> {
     let malformed = |detail: String| ScanError::MalformedReport(detail);
 
-    let parsed: PredictResponse = serde_json::from_str(body)
-        .map_err(|error| malformed(format!("sidecar response is not a predict result: {error}")))?;
+    let parsed: ScanResponse = serde_json::from_str(body).map_err(|error| {
+        malformed(format!("sidecar response is not a systemone result: {error}"))
+    })?;
 
     let mut per_class = Vec::with_capacity(LEAK_QUESTIONS.len());
     let mut confidence: Option<f64> = None;
@@ -380,6 +390,7 @@ mod tests {
         }
     }
 
+
     #[test]
     fn a_full_predict_response_parses_into_a_scan_report() {
         let mut body = serde_json::from_str::<Value>(&predict_response(Value::Null)).unwrap();
@@ -388,7 +399,7 @@ mod tests {
         body["answers"]["street_address"]["noul"] = json!(0.0);
         body["answers"]["street_address"]["confidence"] = json!(0.95);
 
-        let report = parse_predict_response(&body.to_string()).unwrap();
+        let report = parse_scan_response(&body.to_string()).unwrap();
 
         let full_name = report
             .per_class
@@ -413,7 +424,7 @@ mod tests {
         let body = predict_response(json!({ "gov_id": Value::Null }));
         // A null answer fails deserialization — still untrustworthy either way.
         assert!(matches!(
-            parse_predict_response(&body),
+            parse_scan_response(&body),
             Err(ScanError::MalformedReport(_))
         ));
 
@@ -422,7 +433,7 @@ mod tests {
         let mut root = serde_json::from_str::<Value>(&predict_response(Value::Null)).unwrap();
         root["answers"].as_object_mut().unwrap().remove("exact_dob");
         assert!(matches!(
-            parse_predict_response(&root.to_string()),
+            parse_scan_response(&root.to_string()),
             Err(ScanError::MalformedReport(detail)) if detail.contains("exact_dob"),
         ));
     }
@@ -438,7 +449,7 @@ mod tests {
             let body = predict_response(json!({ id: { "noul": value, "confidence": 0.9 } }));
             assert!(
                 matches!(
-                    parse_predict_response(&body),
+                    parse_scan_response(&body),
                     Err(ScanError::MalformedReport(_))
                 ),
                 "expected {value} to be rejected"
@@ -447,7 +458,7 @@ mod tests {
         let low_confidence =
             predict_response(json!({ "full_name": { "noul": 0.1, "confidence": 1.2 } }));
         assert!(matches!(
-            parse_predict_response(&low_confidence),
+            parse_scan_response(&low_confidence),
             Err(ScanError::MalformedReport(_))
         ));
     }
@@ -455,11 +466,11 @@ mod tests {
     #[test]
     fn a_non_json_body_is_malformed() {
         assert!(matches!(
-            parse_predict_response("<html>gateway error</html>"),
+            parse_scan_response("<html>gateway error</html>"),
             Err(ScanError::MalformedReport(_))
         ));
         assert!(matches!(
-            parse_predict_response(""),
+            parse_scan_response(""),
             Err(ScanError::MalformedReport(_))
         ));
     }

@@ -205,7 +205,7 @@ mod tests {
         ResearchPurpose::DomainResearch(Domain::Wealth)
     }
 
-    /// A canned `/predict` server on a random loopback port: clean scan
+    /// A canned `/v1/systemone` server on a random loopback port: clean scan
     /// answers for all six leak classes, one request at a time. The
     /// supervisor's TCP probes connect without sending; those are ignored.
     struct CannedServer {
@@ -231,7 +231,7 @@ mod tests {
                         Ok((mut stream, _)) => {
                             stream.set_nonblocking(false).unwrap();
                             if read_http_request(&mut stream).is_some() {
-                                let body = canned_predict_response();
+                                let body = canned_scan_response();
                                 let response = format!(
                                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                                      Content-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -306,7 +306,7 @@ mod tests {
 
     /// A clean scan report for every leak class: nothing flagged, high
     /// confidence.
-    fn canned_predict_response() -> String {
+    fn canned_scan_response() -> String {
         let mut answers = serde_json::Map::new();
         for id in [
             "full_name",
@@ -348,7 +348,7 @@ mod tests {
     /// the supervisor restarts it, and the next gated operation runs the
     /// normal pipeline to ALLOW.
     ///
-    /// The sidecar is real: a spawned child process serving `/predict` on a
+    /// The sidecar is real: a spawned child process serving `/v1/systemone` on a
     /// fixed loopback port (the `sidecar_helper_server` test below,
     /// re-executed as the supervised command). Killing it is a real stop.
     #[test]
@@ -644,7 +644,7 @@ mod tests {
     }
 
     /// Helper test: re-executed as the supervised child process. Serves the
-    /// canned `/predict` response forever on the configured port; the parent
+    /// canned `/v1/systemone` response forever on the configured port; the parent
     /// kills it to simulate a sidecar stop.
     #[test]
     fn sidecar_helper_server() {
@@ -679,7 +679,7 @@ mod tests {
                 Ok((mut stream, _)) => {
                     stream.set_nonblocking(false).unwrap();
                     if read_http_request(&mut stream).is_some() {
-                        let body = canned_predict_response();
+                        let body = canned_scan_response();
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                              Content-Length: {}\r\nConnection: close\r\n\r\n{}",

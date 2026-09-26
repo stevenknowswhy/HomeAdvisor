@@ -2,10 +2,10 @@
 //!
 //! Three legs, none of which need the real model:
 //!
-//! 1. **Contract test against a mock HTTP server** matching the `/predict`
-//!    shape from the integration guide — the client's request carries the
-//!    payload as `state` plus all six `noul` questions in one body (one
-//!    forward pass), and the response parses into a
+//! 1. **Contract test against a mock HTTP server** matching the
+//!    `/v1/systemone` shape `laya-serve` answers — the client's request
+//!    carries the payload as `state` plus all six `noul` questions in one
+//!    body (one forward pass), and the response parses into a
 //!    [`ha_core::ScanReport`] of per-class probabilities.
 //! 2. **Fail-closed paths**: connection refused and HTTP failure statuses
 //!    map to [`ha_core::ScanError::Unavailable`]; a malformed report maps to
@@ -152,11 +152,11 @@ fn write_response(stream: &mut TcpStream, response: &MockResponse) {
     stream.flush().expect("flush response");
 }
 
-/// A response in the guide's shape: `answers` keyed by question id, each
-/// `noul` answer carrying `noul` + `confidence` — plus the `action` head the
-/// real sidecar adds and extra top-level fields (`usage`), which the client
-/// must tolerate.
-fn predict_response_json(noul: f64, confidence: f64) -> String {
+/// A response in laya-serve's shape: `answers` keyed by question id, each
+/// `noul` answer carrying `noul` + `confidence` — plus the `action` head
+/// the real sidecar adds, a Router `routing` block, and extra top-level
+/// fields (`usage`), all of which the client must tolerate.
+fn scan_response_json(noul: f64, confidence: f64) -> String {
     let mut answers = serde_json::Map::new();
     for id in QUESTION_IDS {
         answers.insert(
@@ -171,6 +171,7 @@ fn predict_response_json(noul: f64, confidence: f64) -> String {
     serde_json::json!({
         "answers": Value::Object(answers),
         "usage": { "input_tokens": 128 },
+        "routing": { "model": "english" },
     })
     .to_string()
 }
@@ -207,15 +208,15 @@ fn assert_probabilities_in_range(report: &ScanReport) {
     assert!((0.0..=1.0).contains(&report.confidence));
 }
 
-/// AC4, contract leg: against a mock HTTP server matching the `/predict`
-/// shape, the client parses per-class probabilities into a `ScanReport` —
-/// and its request honors the contract (state passthrough, all six `noul`
-/// questions in one body).
+/// AC4, contract leg: against a mock HTTP server matching the
+/// `/v1/systemone` shape, the client parses per-class probabilities into a
+/// `ScanReport` — and its request honors the contract (state passthrough,
+/// all six `noul` questions in one body).
 #[test]
 fn the_sidecar_contract_parses_the_predict_shape_over_the_wire() {
     let mock = MockSidecar::start(vec![MockResponse::json(
         200,
-        &predict_response_json(0.02, 0.9),
+        &scan_response_json(0.02, 0.9),
     )]);
     let sidecar = sidecar_from(&mock);
     let payload = payload();
@@ -253,7 +254,7 @@ fn the_sidecar_contract_parses_the_predict_shape_over_the_wire() {
     assert_eq!(requests.len(), 1, "one scan, one request");
     let request = &requests[0];
     assert!(
-        request.starts_with("POST /predict HTTP/1.1"),
+        request.starts_with("POST /v1/systemone HTTP/1.1"),
         "request line: {:?}",
         request.lines().next().unwrap_or_default()
     );
@@ -317,7 +318,7 @@ fn connection_refused_maps_to_scan_unavailable_and_the_gate_blocks() {
 fn a_malformed_sidecar_report_blocks_through_the_pipeline() {
     let mock = MockSidecar::start(vec![MockResponse::json(
         200,
-        "<html>not a predict result</html>",
+        "<html>not a systemone result</html>",
     )]);
     let sidecar = sidecar_from(&mock);
     let mut store = store();
@@ -326,7 +327,7 @@ fn a_malformed_sidecar_report_blocks_through_the_pipeline() {
 
     match outcome.verdict {
         GateVerdict::Blocked(BlockReason::ScanUnavailable { detail }) => {
-            assert!(detail.contains("malformed") || detail.contains("not a predict result"));
+            assert!(detail.contains("malformed") || detail.contains("not a systemone result"));
         }
         other => panic!("expected a fail-closed block, got {other:?}"),
     }
