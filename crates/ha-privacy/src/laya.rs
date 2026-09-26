@@ -75,39 +75,95 @@ pub const DEFAULT_CHECKPOINT: &str = "convaiinnovations/laya";
 /// the gate.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The leak-scan question set: `(question id, leak class, wording)`, one
+/// The leak-scan question set: `(question id, leak class, question)`, one
 /// `noul` question per class, in [`LeakClass`] declaration order. The
-/// wordings are the user's sketch verbatim where the sketch has them.
-const LEAK_QUESTIONS: &[(&str, LeakClass, &str)] = &[
+/// instructions are the user's sketch verbatim where the sketch has them.
+///
+/// Every question carries the shape upstream documents for the English
+/// checkpoint's label-following failure (laya issue #156): the checkpoint
+/// can follow its option labels instead of the state and return a confident
+/// "no" for clearly positive input. The workaround asks with `criteria`
+/// keyed `true`/`false` — an explicit description of each outcome — and
+/// overrides the model-facing labels with neutral text (`A`/`B`, upstream
+/// README "Decision Primitives"), so the model scores the state against
+/// the criteria and cannot lean on a label's wording to a wrong answer.
+/// The returned `noul` value is P(true) regardless of the labels. A
+/// leak-scan "no" is the wrong-direction failure (a missed leak reads as
+/// clean), so the shape is load-bearing, not cosmetic.
+struct NoulQuestion {
+    instructions: &'static str,
+    criteria_true: &'static str,
+    criteria_false: &'static str,
+}
+
+/// The model-facing option labels, upstream's documented neutral override:
+/// distinct, non-empty, and free of any meaning the checkpoint could follow
+/// instead of the state.
+const NOUL_LABELS: (&str, &str) = ("A", "B"); // (true, false)
+
+const LEAK_QUESTIONS: &[(&str, LeakClass, NoulQuestion)] = &[
     (
         "full_name",
         LeakClass::FullName,
-        "Does this text contain any real first or last names of family members?",
+        NoulQuestion {
+            instructions: "Does this text contain any real first or last names of family members?",
+            criteria_true: "the text contains real first or last names of family members",
+            criteria_false: "the text contains no real first or last names of family members",
+        },
     ),
     (
         "exact_dob",
         LeakClass::ExactDob,
-        "Does this text contain a person's exact date of birth?",
+        NoulQuestion {
+            instructions: "Does this text contain a person's exact date of birth?",
+            criteria_true: "the text contains a person's exact date of birth",
+            criteria_false: "the text contains no person's exact date of birth",
+        },
     ),
     (
         "named_place",
         LeakClass::NamedPlace,
-        "Does this text contain a specific school name or other named place that could identify the family?",
+        NoulQuestion {
+            instructions:
+                "Does this text contain a specific school name or other named place that could identify the family?",
+            criteria_true:
+                "the text contains a specific school name or other named place that could identify the family",
+            criteria_false:
+                "the text contains no specific school name or other named place that could identify the family",
+        },
     ),
     (
         "street_address",
         LeakClass::StreetAddress,
-        "Does this text contain exact street addresses or GPS data?",
+        NoulQuestion {
+            instructions: "Does this text contain exact street addresses or GPS data?",
+            criteria_true: "the text contains exact street addresses or GPS data",
+            criteria_false: "the text contains no exact street addresses and no GPS data",
+        },
     ),
     (
         "gov_id",
         LeakClass::GovId,
-        "Does this text contain raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures?",
+        NoulQuestion {
+            instructions:
+                "Does this text contain raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures?",
+            criteria_true:
+                "the text contains raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures",
+            criteria_false:
+                "the text contains no raw bank account numbers, credit card digits, government ID numbers, or explicit salary figures",
+        },
     ),
     (
         "unique_combination",
         LeakClass::UniqueCombination,
-        "Even if no single field is identifying, do these fields together single out one specific family, such as an exact age with a small town and an occupation?",
+        NoulQuestion {
+            instructions:
+                "Even if no single field is identifying, do these fields together single out one specific family, such as an exact age with a small town and an occupation?",
+            criteria_true:
+                "even if no single field is identifying, these fields together single out one specific family, such as an exact age with a small town and an occupation",
+            criteria_false:
+                "even if no single field is identifying, these fields together do not single out any one specific family",
+        },
     ),
 ];
 
@@ -231,11 +287,20 @@ fn predict_body(payload: &Value) -> Value {
 }
 
 fn leak_questions() -> Value {
+    let (label_true, label_false) = NOUL_LABELS;
     let mut questions = serde_json::Map::new();
-    for (id, _, instructions) in LEAK_QUESTIONS {
+    for (id, _, question) in LEAK_QUESTIONS {
         questions.insert(
             id.to_string(),
-            serde_json::json!({ "type": "noul", "instructions": instructions }),
+            serde_json::json!({
+                "type": "noul",
+                "instructions": question.instructions,
+                "criteria": {
+                    "true": question.criteria_true,
+                    "false": question.criteria_false,
+                },
+                "labels": { "true": label_true, "false": label_false },
+            }),
         );
     }
     Value::Object(questions)
@@ -383,13 +448,64 @@ mod tests {
         assert_eq!(body["state"], payload);
         let questions = body["questions"].as_object().unwrap();
         assert_eq!(questions.len(), LEAK_QUESTIONS.len());
-        for (id, _, instructions) in LEAK_QUESTIONS {
+        for (id, _, expected) in LEAK_QUESTIONS {
             let question = questions.get(*id).unwrap();
             assert_eq!(question["type"], "noul");
-            assert_eq!(question["instructions"], *instructions);
+            assert_eq!(question["instructions"], expected.instructions);
+            assert_eq!(question["criteria"]["true"], expected.criteria_true);
+            assert_eq!(question["criteria"]["false"], expected.criteria_false);
+            assert_eq!(question["labels"]["true"], NOUL_LABELS.0);
+            assert_eq!(question["labels"]["false"], NOUL_LABELS.1);
         }
     }
-
+    /// AC3: the question-shape pin. Upstream issue #156 — the English
+    /// checkpoint can follow its option labels and return a confident
+    /// false negative, the one wrong-direction failure a leak scan can
+    /// make. Every question must carry the documented workaround: criteria
+    /// keyed `true`/`false` describing each outcome, and a `labels`
+    /// override with exactly the two distinct, non-empty neutral texts.
+    #[test]
+    fn every_leak_question_pins_the_issue_156_workaround_shape() {
+        let questions = leak_questions();
+        let questions = questions.as_object().unwrap();
+        assert_eq!(questions.len(), 6, "one question per leak class");
+        for (id, _, _) in LEAK_QUESTIONS {
+            let question = questions.get(*id).unwrap();
+            assert_eq!(question["type"], "noul", "question `{id}`");
+            assert!(
+                !question["instructions"].as_str().unwrap().trim().is_empty(),
+                "question `{id}` has instructions"
+            );
+            let criteria = question["criteria"].as_object().unwrap_or_else(|| {
+                panic!("question `{id}` must carry criteria keyed true/false")
+            });
+            assert_eq!(criteria.len(), 2, "question `{id}` criteria keys");
+            for key in ["true", "false"] {
+                assert!(
+                    !criteria[key].as_str().unwrap_or_default().trim().is_empty(),
+                    "question `{id}` criteria.{key} must be a non-empty description"
+                );
+            }
+            let labels = question["labels"].as_object().unwrap_or_else(|| {
+                panic!("question `{id}` must carry the labels override")
+            });
+            assert_eq!(
+                labels.keys().collect::<Vec<_>>(),
+                vec!["false", "true"],
+                "question `{id}` labels must be exactly true/false"
+            );
+            for key in ["true", "false"] {
+                assert!(
+                    !labels[key].as_str().unwrap_or_default().trim().is_empty(),
+                    "question `{id}` labels.{key} must be non-empty"
+                );
+            }
+            assert_ne!(
+                labels["true"], labels["false"],
+                "question `{id}` labels must be distinct"
+            );
+        }
+    }
 
     #[test]
     fn a_full_predict_response_parses_into_a_scan_report() {
