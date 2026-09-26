@@ -64,6 +64,9 @@ pub struct EvidenceView {
     pub source_url: Option<String>,
     pub source_title: Option<String>,
     pub publication_date: Option<String>,
+    /// The citation text ("as of" statement) — what the evidence claims,
+    /// so a served recommendation can show its receipt.
+    pub summary: Option<String>,
 }
 
 /// One row of the append-only egress log: the family-facing privacy
@@ -130,6 +133,8 @@ pub enum PrivacyStatus {
 pub enum AppError {
     #[error("store error: {0}")]
     Store(#[from] ha_store::StoreError),
+    #[error("advice pack error: {0}")]
+    Packs(#[from] ha_packs::PackError),
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
@@ -308,7 +313,9 @@ pub(crate) const RECEIPTS_PAGE_SIZE: i64 = 200;
 /// three served recommendations. The served query enforces the same bound
 /// explicitly so the view's cost — including its per-row evidence
 /// lookups — is bounded even if the budget table were ever relaxed.
-const DAILY_SERVED_LIMIT: i64 = 3;
+/// The schema caps a day's served rows; the same cap bounds the engine
+/// batch before it reaches the writer.
+pub(crate) const DAILY_SERVED_LIMIT: i64 = 3;
 
 pub(crate) fn daily_recommendations_core(
     app: &AppState,
@@ -435,7 +442,7 @@ fn evidence_for(
     recommendation_id: &str,
 ) -> Result<Vec<EvidenceView>, rusqlite::Error> {
     const EVIDENCE_SQL: &str = "
-        SELECT id, source_type, source_url, source_title, publication_date
+        SELECT id, source_type, source_url, source_title, publication_date, summary
         FROM evidence
         WHERE recommendation_id = ?1
         ORDER BY id ASC";
@@ -447,6 +454,7 @@ fn evidence_for(
             source_url: row.get(2)?,
             source_title: row.get(3)?,
             publication_date: row.get(4)?,
+            summary: row.get(5)?,
         })
     })?;
     rows.collect()

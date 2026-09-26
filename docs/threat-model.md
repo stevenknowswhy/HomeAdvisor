@@ -221,7 +221,16 @@ The policy is enforced in CI by `cargo-deny` (`.github/workflows/ci.yml`, job
 - **`sources`** — unknown registries and git sources are refused; the graph
   comes from crates.io only.
 
-At the time of writing the lockfile holds 447 packages and the deny-list matches
+**The notification plugin, reviewed** (added with the advice-pack timing
+ladder): `tauri-plugin-notification` posts rungs of the daily ladder —
+morning brief, deadline nudges, Sunday planning — to the OS notification
+center. Its desktop path is a local OS call, not a network send: payloads are
+built from pack rule content and counts only (a unit test asserts no profile
+data is serialized), the capability grants only `notification:default` to the
+main window, and the plugin adds no network client. It is reviewed here rather
+than silently, per the policy.
+
+At the time of writing the lockfile holds 516 packages and the deny-list matches
 none of them; the audit job running on every push and PR is the standing proof.
 
 ## Threat summary

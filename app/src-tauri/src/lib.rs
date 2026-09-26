@@ -29,6 +29,7 @@ mod commands;
 mod egress;
 mod keystore;
 mod onboarding;
+mod packs;
 mod state;
 mod supervisor;
 
@@ -46,6 +47,9 @@ mod onboarding_tests;
 #[allow(clippy::expect_used)] // builder failure at startup is unrecoverable; the template aborts with a diagnostic
 pub fn run() {
     let app = tauri::Builder::default()
+        // Local notifications (the advice-pack ladder): no network path —
+        // the desktop plugin posts to the OS notification center.
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(commands::invoke_handler())
         .build(tauri::generate_context!())
         .expect("failed to build the Home Advisor application");

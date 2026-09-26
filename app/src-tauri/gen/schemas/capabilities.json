@@ -1,1 +1,1 @@
-{}
+{"main-notifications":{"identifier":"main-notifications","description":"Grants the main window the local notification permissions used by the advice-pack timing ladder. The plugin's desktop path posts to the OS notification center and makes no network calls.","local":true,"windows":["main"],"permissions":["notification:default"]}}

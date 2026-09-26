@@ -468,7 +468,20 @@ pub(crate) fn create_household_core(
         ],
     )?;
 
-    get_household_row(conn, &id)
+    let household = get_household_row(conn, &id);
+
+    // The first daily evaluation rides onboarding's tail — after the
+    // household commits, in its own call: the evaluation locks the store
+    // itself, so this function's guard must drop first. Failure is
+    // non-fatal by design (advice packs are additive value, not a
+    // privacy surface): the household still onboards, the daily view
+    // still renders its empty state, the failure is logged.
+    drop(store);
+    if household.is_ok() {
+        crate::packs::run_daily_evaluation(app);
+    }
+
+    household
 }
 
 pub(crate) fn update_household_core(

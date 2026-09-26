@@ -133,6 +133,11 @@
                           · {item.publicationDate}
                         </span>
                       {/if}
+                      {#if item.summary}
+                        <span class="evidence-summary" data-testid="evidence-summary">
+                          {item.summary}
+                        </span>
+                      {/if}
                     </li>
                   {/each}
                 </ul>
@@ -239,8 +244,15 @@
   .evidence li {
     font-size: 0.85rem;
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: 0.4rem;
+  }
+
+  .evidence-summary {
+    flex-basis: 100%;
+    font-size: 0.78rem;
+    color: var(--muted, #5b6675);
   }
 
   .evidence a {

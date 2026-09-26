@@ -36,6 +36,7 @@ function recommendation(
         sourceUrl: "https://example.org/study",
         sourceTitle: "A source",
         publicationDate: "2026-01-01",
+        summary: "Example citation, as of 2026-09",
       },
     ],
     ...overrides,
@@ -69,6 +70,33 @@ describe("DailyView", () => {
     expect(link.href).toBe("https://example.org/study");
     expect(link.textContent).toContain("A source");
     expect(link.rel).toContain("noopener");
+  });
+
+  it("renders the citation summary with its evidence and skips a missing one", async () => {
+    fetchDailyRecommendations.mockResolvedValueOnce([
+      recommendation(),
+      recommendation({
+        id: "rec-2",
+        category: "health",
+        title: "Swim lesson this week",
+        evidence: [
+          {
+            id: "ev-2",
+            sourceType: "guideline",
+            sourceUrl: null,
+            sourceTitle: "A guideline",
+            publicationDate: null,
+            summary: null,
+          },
+        ],
+      }),
+    ]);
+
+    render(DailyView);
+
+    const summaries = await screen.findAllByTestId("evidence-summary");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].textContent).toContain("Example citation, as of 2026-09");
   });
 
   it("renders the designed empty state when nothing is served", async () => {
