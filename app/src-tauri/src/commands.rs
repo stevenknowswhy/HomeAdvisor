@@ -323,6 +323,7 @@ pub(crate) fn daily_recommendations_core(
                created_at, expires_at
         FROM recommendation
         WHERE status = 'served'
+          AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         ORDER BY created_at DESC, id ASC
         LIMIT ?1";
 

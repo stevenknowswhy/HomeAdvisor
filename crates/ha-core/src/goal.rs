@@ -23,6 +23,22 @@ pub enum Domain {
     Connection,
 }
 
+impl Domain {
+    /// The exact TEXT value the store's `domain` CHECK accepts — and the
+    /// string the typed writer puts in `recommendation.category`, so a
+    /// recommendation and the goal it lands on speak one vocabulary.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Domain::Health => "health",
+            Domain::Wealth => "wealth",
+            Domain::Education => "education",
+            Domain::Career => "career",
+            Domain::Lifestyle => "lifestyle",
+            Domain::Connection => "connection",
+        }
+    }
+}
+
 /// The horizon a goal is aimed at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Timeframe {
@@ -115,5 +131,18 @@ mod tests {
         let json = serde_json::to_string(&household).expect("serialize");
         let back: Goal = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.owner, None);
+    }
+
+    #[test]
+    fn domain_pins_the_goal_check_vocabulary() {
+        // Mirrors the `domain` CHECK in M001_CORE_SCHEMA (ha-store
+        // migrations.rs) — the same six values the writer puts in
+        // `recommendation.category`.
+        assert_eq!(Domain::Health.as_str(), "health");
+        assert_eq!(Domain::Wealth.as_str(), "wealth");
+        assert_eq!(Domain::Education.as_str(), "education");
+        assert_eq!(Domain::Career.as_str(), "career");
+        assert_eq!(Domain::Lifestyle.as_str(), "lifestyle");
+        assert_eq!(Domain::Connection.as_str(), "connection");
     }
 }

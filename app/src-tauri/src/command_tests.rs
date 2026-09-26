@@ -63,19 +63,33 @@ fn seed_household(conn: &Connection) {
 }
 
 fn insert_recommendation(conn: &Connection, id: &str, status: &str, created_at: &str) {
+    insert_recommendation_with_expiry(conn, id, status, created_at, None);
+}
+
+/// The same seed with control over `expires_at` — the field the daily
+/// view's expiry predicate filters on. Wall-clock-independent: tests pass
+/// ancient or far-future stamps directly.
+fn insert_recommendation_with_expiry(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    created_at: &str,
+    expires_at: Option<&str>,
+) {
     conn.execute(
         "INSERT INTO recommendation
              (id, household_id, goal_id, category, title_local, explanation_local,
               recommendation_type, effort_estimate, expected_benefit, confidence,
               status, why_me_local, why_now_local, created_at, expires_at)
          VALUES (?1, 'hh-1', NULL, 'wealth', ?2, ?3, 'advice', '2 hours', 'a calmer morning',
-                 0.72, ?4, 'Why me', 'Why now', ?5, NULL)",
+                 0.72, ?4, 'Why me', 'Why now', ?5, ?6)",
         rusqlite::params![
             id,
             format!("Title {id}"),
             format!("Explanation {id}"),
             status,
             created_at,
+            expires_at,
         ],
     )
     .unwrap();
@@ -469,6 +483,63 @@ fn the_daily_view_is_bounded_by_the_output_budget() {
     // rows, newest first, even when the store holds more.
     let ids: Vec<&str> = served.iter().map(|view| view.id.as_str()).collect();
     assert_eq!(ids, ["rec-5", "rec-4", "rec-3"]);
+}
+
+#[test]
+fn the_daily_view_hides_expired_rows() {
+    let app = test_app();
+    {
+        let mut store = app.lock_store().unwrap();
+        let conn = store.conn();
+        seed_household(conn);
+        // Three served rows: one whose expiry has passed, one far in the
+        // future, one with no expiry at all (a legacy row the writer never
+        // wrote). Only the expired one stops rendering.
+        insert_recommendation_with_expiry(
+            conn,
+            "rec-expired",
+            "served",
+            "2026-09-25T08:00:00.000Z",
+            Some("2000-01-01T00:00:00.000Z"),
+        );
+        insert_recommendation_with_expiry(
+            conn,
+            "rec-live",
+            "served",
+            "2026-09-25T09:00:00.000Z",
+            Some("2999-12-31T23:59:59.999Z"),
+        );
+        insert_recommendation_with_expiry(
+            conn,
+            "rec-open",
+            "served",
+            "2026-09-25T10:00:00.000Z",
+            None,
+        );
+        // A row the sweep already flipped is invisible for the same reason:
+        // its status is no longer `served`.
+        insert_recommendation_with_expiry(
+            conn,
+            "rec-swept",
+            "expired",
+            "2026-09-25T11:00:00.000Z",
+            Some("2000-01-01T00:00:00.000Z"),
+        );
+    }
+
+    let served = daily_recommendations_core(&app).unwrap();
+
+    let ids: Vec<&str> = served.iter().map(|view| view.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["rec-open", "rec-live"],
+        "expired rows stop rendering; unexpired and open-ended rows stay"
+    );
+    assert_eq!(served[0].expires_at, None);
+    assert_eq!(
+        served[1].expires_at.as_deref(),
+        Some("2999-12-31T23:59:59.999Z")
+    );
 }
 
 // ──────────────────────── privacy_status ──────────────────────────

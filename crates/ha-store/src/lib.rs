@@ -32,11 +32,13 @@
 mod audit;
 mod key;
 mod migrations;
+mod recommendations;
 mod store;
 
 pub use audit::{scan_forbidden_columns, PiiColumnViolation};
 pub use key::StoreKey;
 pub use migrations::MIGRATIONS;
+pub use recommendations::NewRecommendation;
 pub use store::Store;
 
 use thiserror::Error;
