@@ -25,6 +25,12 @@ use serde_json::{Map, Value};
 
 use ha_core::{Generalizer, OutboundContext, ResearchPurpose};
 
+// Re-exported from `ha-core` so the privacy redactor and the advisory
+// engine share one region vocabulary — the `household` CHECK's five
+// values. The `ha_privacy::RegionClass` and `crate::redact::RegionClass`
+// paths are unchanged.
+pub use ha_core::RegionClass;
+
 /// JSON-pointer keys that carry a person's name. A leaf under one of these
 /// keys is stripped from every outbound payload, and an allow rule pointing
 /// at one is a [`RedactionError::NameKeyAllowed`] configuration error.
@@ -45,30 +51,6 @@ const NAME_KEYS: &[&str] = &[
     "nickname",
     "preferred_name",
 ];
-
-/// Generalized location classes, exactly the values the `household`
-/// table's CHECK constraint admits (`urban_metro`, `suburban`, `rural`,
-/// `small_town`, `unclassified`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum RegionClass {
-    UrbanMetro,
-    Suburban,
-    Rural,
-    SmallTown,
-    Unclassified,
-}
-
-impl RegionClass {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RegionClass::UrbanMetro => "urban_metro",
-            RegionClass::Suburban => "suburban",
-            RegionClass::Rural => "rural",
-            RegionClass::SmallTown => "small_town",
-            RegionClass::Unclassified => "unclassified",
-        }
-    }
-}
 
 /// The locally maintained map of exact locality strings to region classes.
 ///
