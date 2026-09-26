@@ -27,6 +27,8 @@ export interface EvidenceView {
   sourceUrl: string | null;
   sourceTitle: string | null;
   publicationDate: string | null;
+  /** The citation text — what the evidence claims, with its as-of date. */
+  summary: string | null;
 }
 
 /** One served recommendation for the daily view (`RecommendationView`). */

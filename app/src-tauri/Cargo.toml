@@ -17,6 +17,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 ha-store = { path = "../../crates/ha-store" }
 ha-privacy = { path = "../../crates/ha-privacy" }
+ha-packs = { version = "0.1.0", path = "../../crates/ha-packs" }
+# The evaluation hooks read the local calendar date for the daily budget
+# and the timing ladder; no network time.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # The commands read the seeded schema with raw SQL through `Store::conn()` —
 # the sanctioned escape hatch for the app backend, as for the CLI demo
 # (see `ha_store::Store::conn`).
@@ -33,6 +37,7 @@ shell-words = "1"
 # 256 bits of fresh entropy for a generated database key (see `keystore.rs`).
 # Already in the tree via uuid's v4 feature, so this pins no new version.
 getrandom = "0.4"
+tauri-plugin-notification = "2"
 
 # The first-run database key lives in the login Keychain on macOS: Apple's
 # Security.framework, wrapped natively. MIT/Apache-2.0, crates.io-only, no

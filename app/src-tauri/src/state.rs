@@ -8,7 +8,7 @@
 //! supervisor. Nothing here is serializable or clonable into the webview
 //! on purpose.
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ha_privacy::{probe_health, LayaSidecar};
@@ -16,6 +16,7 @@ use ha_store::Store;
 use tauri::Manager as _;
 
 use crate::commands::AppError;
+use crate::packs::{LadderSink, PluginNotifier};
 use crate::supervisor::{
     CommandSpawner, ExternalSidecar, HealthProbe, HttpHealthProbe, SidecarSpawner,
     SidecarSupervisor, SupervisionPolicy, HEALTH_CHECK_INTERVAL,
@@ -41,6 +42,9 @@ pub struct AppState {
     /// The sidecar supervisor (spawn, health-check, restart) — the machine
     /// behind `privacy_status` and the gated egress pre-flight.
     supervisor: SidecarSupervisor,
+    /// The local notification sink — `None` in tests and headless runs,
+    /// the Tauri plugin in production (set in [`open_state`]).
+    notifier: Option<Arc<dyn LadderSink>>,
 }
 
 impl AppState {
@@ -53,7 +57,20 @@ impl AppState {
             store: Mutex::new(store),
             sidecar,
             supervisor,
+            notifier: None,
         }
+    }
+
+    /// Attach the notification sink — the production path, called from
+    /// [`open_state`] where the app handle lives.
+    pub(crate) fn with_notifier(mut self, notifier: Arc<dyn LadderSink>) -> Self {
+        self.notifier = Some(notifier);
+        self
+    }
+
+    /// The notification sink, when this run has one.
+    pub(crate) fn notifier(&self) -> Option<Arc<dyn LadderSink>> {
+        self.notifier.clone()
     }
 
     /// Lock the store for one query. A poisoned mutex — a query that
@@ -162,7 +179,18 @@ pub fn open_state(app: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error
         Box::new(HttpHealthProbe::new(&sidecar_url, SIDECAR_PROBE_TIMEOUT));
     let supervisor = SidecarSupervisor::with_policy(probe, spawner, SupervisionPolicy::default());
 
-    let state = AppState::new(store, sidecar, supervisor);
+    let state = AppState::new(store, sidecar, supervisor)
+        // The notification sink is production-only: local notifications
+        // through the Tauri plugin, permission requested at the first
+        // evaluation that sends.
+        .with_notifier(Arc::new(PluginNotifier::new(app.clone())));
+
+    // The startup re-evaluation: idempotent via the budget row (a same-day
+    // run writes nothing and fires no rung). Non-fatal by design — the
+    // app opens even when the advice packs fail; the daily view renders
+    // its empty state and the failure is logged.
+    crate::packs::run_daily_evaluation(&state);
+
     // The background loop keeps restarts happening without a status read
     // asking for one; the supervisor supersedes any earlier loop.
     state

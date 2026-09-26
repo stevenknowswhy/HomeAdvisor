@@ -42,6 +42,7 @@ const recommendations: RecommendationView[] = [
         sourceUrl: "https://example.org/study",
         sourceTitle: "A source",
         publicationDate: "2026-01-01",
+        summary: "Example citation, as of 2026-09",
       },
     ],
   },
