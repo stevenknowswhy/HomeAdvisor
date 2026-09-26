@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "pack": { "id": "finance", "version": "1.0.0" },
+  "rules": [
+    {
+      "id": "finance.marketplace-open-enrollment",
+      "title": "Health insurance open enrollment is open",
+      "body": "Marketplace open enrollment runs November 1 to January 15 in HealthCare.gov states (state sites vary). Enroll by December 15 for coverage that starts January 1.",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "HealthCare.gov",
+          "citation": "HealthCare.gov dates and deadlines, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": {},
+        "window": { "kind": "annual", "opens": "--11-01", "closes": "--01-15" }
+      },
+      "notify": { "ladder": "deadline", "nudge_days_before_close": [14, 2] }
+    },
+    {
+      "id": "finance.ctc-claim",
+      "title": "Claim the Child Tax Credit when you file",
+      "body": "The Child Tax Credit is worth up to $2,200 per qualifying child under 17 for the 2026 tax year, up to $1,700 of it refundable. It phases out above $200,000 of income for single filers ($400,000 joint).",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "IRS",
+          "citation": "IRS Child Tax Credit guidance, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": {
+          "age_band_children": [
+            "age_0_2",
+            "age_3_5",
+            "age_6_9",
+            "age_10_12",
+            "age_13_15",
+            "age_16_17"
+          ],
+          "income_band": [
+            "income_under_50k",
+            "income_50k_75k",
+            "income_75k_100k",
+            "income_100k_150k",
+            "income_150k_200k"
+          ]
+        },
+        "window": { "kind": "deadline", "closes": "--04-15" }
+      },
+      "notify": { "ladder": "deadline", "nudge_days_before_close": [14, 2] }
+    },
+    {
+      "id": "finance.ctc-phaseout-check",
+      "title": "High income? The Child Tax Credit may still apply",
+      "body": "The credit doesn't cut off at a band edge: it phases out $50 per $1,000 above $200,000 of income for single filers ($400,000 joint), so many joint filers above $200,000 keep the full $2,200 per child under 17.",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "IRS",
+          "citation": "IRS Child Tax Credit guidance, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": {
+          "age_band_children": [
+            "age_0_2",
+            "age_3_5",
+            "age_6_9",
+            "age_10_12",
+            "age_13_15",
+            "age_16_17"
+          ],
+          "income_band": ["income_200k_plus"]
+        },
+        "window": { "kind": "deadline", "closes": "--04-15" }
+      },
+      "notify": { "ladder": "deadline", "nudge_days_before_close": [14, 2] }
+    },
+    {
+      "id": "finance.fsa-year-end",
+      "title": "Spend your health FSA before year end",
+      "body": "Health FSA balances usually don't roll over: most plans require spending by December 31, though some allow a limited carryover or grace period — check yours and plan glasses or elective care early.",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "IRS",
+          "citation": "IRS health FSA rules (Publication 969), as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": {},
+        "window": { "kind": "deadline", "closes": "--12-31" }
+      },
+      "notify": { "ladder": "deadline", "nudge_days_before_close": [14, 2] }
+    }
+  ]
+}

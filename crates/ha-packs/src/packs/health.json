@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "pack": { "id": "health", "version": "1.0.0" },
+  "rules": [
+    {
+      "id": "health.well-child-infant-visits",
+      "title": "Well-child visits come fast in the first two years",
+      "body": "The AAP schedule sets about a dozen well-child visits between birth and age three, then one a year. Book the next one before you leave each appointment.",
+      "evidence": [
+        {
+          "source": "professional_association",
+          "label": "American Academy of Pediatrics",
+          "citation": "AAP Recommendations for Preventive Pediatric Health Care (periodicity schedule), as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": { "age_band_children": ["age_0_2"] },
+        "window": { "kind": "none" }
+      },
+      "notify": { "ladder": "morning" }
+    },
+    {
+      "id": "health.well-child-annual",
+      "title": "Book this year's well-child visit",
+      "body": "From age three through the teen years the AAP recommends a well-child visit every year, and most insurance covers it in full. Slots near school breaks go first.",
+      "evidence": [
+        {
+          "source": "professional_association",
+          "label": "American Academy of Pediatrics",
+          "citation": "AAP Recommendations for Preventive Pediatric Health Care (periodicity schedule), as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": {
+          "age_band_children": ["age_3_5", "age_6_9", "age_10_12", "age_13_15", "age_16_17"]
+        },
+        "window": { "kind": "none" }
+      },
+      "notify": { "ladder": "morning" }
+    },
+    {
+      "id": "health.flu-vaccine-window",
+      "title": "Flu vaccine season is open",
+      "body": "The CDC recommends a flu vaccine for everyone 6 months and older, ideally by the end of October — pharmacies take walk-ins, and one trip covers the whole household.",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "CDC",
+          "citation": "CDC seasonal influenza vaccination recommendations, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": {
+          "age_band_children": [
+            "age_0_2",
+            "age_3_5",
+            "age_6_9",
+            "age_10_12",
+            "age_13_15",
+            "age_16_17",
+            "age_18_24"
+          ]
+        },
+        "window": { "kind": "annual", "opens": "--09-01", "closes": "--10-31" }
+      },
+      "notify": { "ladder": "deadline", "nudge_days_before_close": [14, 2] }
+    },
+    {
+      "id": "health.preteen-vaccines",
+      "title": "Preteen checkup: Tdap, HPV, and meningococcal vaccines",
+      "body": "Around the 11-12 birthday the CDC schedule adds the Tdap booster, the two-dose HPV series, and the first meningococcal shot — catch-up is possible at any age.",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "CDC",
+          "citation": "CDC child and adolescent immunization schedule, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": { "age_band_children": ["age_10_12", "age_13_15"] },
+        "window": { "kind": "none" }
+      },
+      "notify": { "ladder": "morning" }
+    },
+    {
+      "id": "health.sixteen-booster",
+      "title": "Age 16: meningococcal booster is due",
+      "body": "The CDC schedule calls for a MenACWY booster at 16, ahead of the years when meningococcal risk peaks. Some colleges require proof of it.",
+      "evidence": [
+        {
+          "source": "federal_agency",
+          "label": "CDC",
+          "citation": "CDC child and adolescent immunization schedule, as of 2026-09"
+        }
+      ],
+      "when": {
+        "profile": { "age_band_children": ["age_16_17"] },
+        "window": { "kind": "none" }
+      },
+      "notify": { "ladder": "morning" }
+    }
+  ]
+}
