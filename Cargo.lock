@@ -1351,8 +1351,11 @@ dependencies = [
 name = "ha-store"
 version = "0.1.1"
 dependencies = [
+ "chrono",
+ "ha-core",
  "rusqlite",
  "thiserror 2.0.21",
+ "uuid",
  "zeroize",
 ]
 

@@ -7,6 +7,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The typed writer's input: the recommendation vocabulary this store persists.
+ha-core = { path = "../ha-core" }
+# The serving day (`NaiveDate`) the writer keys its budget row and expiry to.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+# Row ids for written recommendations and evidence, matching the app crate.
+uuid = { version = "1", features = ["v4"] }
 # SQLCipher-encrypted SQLite, compiled from source with a vendored OpenSSL so
 # the encryption stack is deterministic and nothing links a system libssl.
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
