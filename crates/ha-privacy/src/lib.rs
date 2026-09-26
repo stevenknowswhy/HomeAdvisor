@@ -31,7 +31,7 @@ pub use egress::{
     block_reason_text, decision_code, list_receipts, payload_hash, record_receipt, EgressReceipt,
     PrivacyError, RecordedReceipt,
 };
-pub use laya::{LayaConfigError, LayaSidecar, DEFAULT_CHECKPOINT};
+pub use laya::{probe_health, LayaConfigError, LayaSidecar, DEFAULT_CHECKPOINT};
 pub use pipeline::{purpose_code, run, GateOutcome, GateVerdict, ScanOutcome};
 pub use redact::{
     age_band_label, household_size_band, income_band_label, redact, transformation_version,

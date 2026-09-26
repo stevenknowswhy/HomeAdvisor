@@ -277,6 +277,52 @@ fn transport_error(url: &str, error: ureq::Error) -> ScanError {
     }
 }
 
+/// The `GET /health` probe the supervisor's health loop runs against the
+/// sidecar — laya-serve's health endpoint. A 200 whose body carries
+/// `"status": "ok"` is the only thing that counts as healthy: with
+/// `LAYA_PRELOAD=1` the server loads its checkpoints before it starts
+/// listening, so a healthy `/health` implies a sidecar ready to scan.
+///
+/// This replaced a bare TCP connect probe, which could only see "port
+/// open" — a listening-but-hung sidecar read as `Healthy` while every scan
+/// timed out into BLOCK. Fail-closed behavior was never wrong either way;
+/// this fixes the status display, not the gate.
+///
+/// Errors carry the probe's complaint verbatim for the supervisor's
+/// degraded-state detail.
+pub fn probe_health(base_url: &str, timeout: Duration) -> Result<(), String> {
+    if !is_loopback_url(base_url) {
+        return Err(format!(
+            "laya sidecar URL must be loopback (localhost, 127.0.0.0/8, or [::1]); got {base_url:?}"
+        ));
+    }
+    let url = format!("{}/health", base_url.trim_end_matches('/'));
+    let agent = agent_with_timeout(timeout);
+    let mut response = agent.get(&url).call().map_err(|error| match error {
+        ureq::Error::StatusCode(status) => {
+            format!("sidecar at {url} returned HTTP {status}")
+        }
+        transport => format!("could not reach the sidecar at {url}: {transport}"),
+    })?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("could not read the sidecar health response: {error}"))?;
+    let health: Value = serde_json::from_str(body.trim())
+        .map_err(|error| format!("sidecar health response is not JSON: {error}"))?;
+    if health.get("status").and_then(Value::as_str) == Some("ok") {
+        Ok(())
+    } else {
+        Err(format!(
+            "sidecar at {url} is not ready: status is {}, not \"ok\"",
+            health
+                .get("status")
+                .map(Value::to_string)
+                .unwrap_or_else(|| "<missing>".to_string())
+        ))
+    }
+}
+
 /// The `/v1/systemone` request body: the payload as `state`, all leak
 /// questions at once — one forward pass per scan.
 fn predict_body(payload: &Value) -> Value {
@@ -338,7 +384,9 @@ fn parse_scan_response(body: &str) -> Result<ScanReport, ScanError> {
     let malformed = |detail: String| ScanError::MalformedReport(detail);
 
     let parsed: ScanResponse = serde_json::from_str(body).map_err(|error| {
-        malformed(format!("sidecar response is not a systemone result: {error}"))
+        malformed(format!(
+            "sidecar response is not a systemone result: {error}"
+        ))
     })?;
 
     let mut per_class = Vec::with_capacity(LEAK_QUESTIONS.len());
@@ -417,6 +465,112 @@ fn is_loopback_url(url: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// A one-response HTTP listener for probe tests: accepts connections,
+    /// and answers each with `body` under HTTP 200 — or, when `body` is
+    /// `None`, accepts and never answers (the hung sidecar the old TCP
+    /// probe mistook for healthy).
+    struct HealthMock {
+        url: String,
+        keep_going: Arc<AtomicBool>,
+    }
+
+    impl HealthMock {
+        fn answering(body: &str) -> Self {
+            Self::start(Some(body.to_string()))
+        }
+
+        fn hung() -> Self {
+            Self::start(None)
+        }
+
+        fn start(body: Option<String>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let keep_going = Arc::new(AtomicBool::new(true));
+            let flag = keep_going.clone();
+            std::thread::spawn(move || {
+                listener.set_nonblocking(true).unwrap();
+                while flag.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            stream.set_nonblocking(false).unwrap();
+                            // Read whatever arrived; a probe is tiny and
+                            // lands in one segment. Not read to parse —
+                            // just to give the client's write somewhere
+                            // to go before we answer (or don't).
+                            let mut buf = [0u8; 4096];
+                            let _ = stream.read(&mut buf);
+                            if let Some(body) = &body {
+                                let response = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                );
+                                let _ = stream.write_all(response.as_bytes());
+                            }
+                            // Without a body the stream is dropped, but the
+                            // probe has its timeout either way.
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self { url, keep_going }
+        }
+    }
+
+    impl Drop for HealthMock {
+        fn drop(&mut self) {
+            self.keep_going.store(false, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn a_health_probe_accepts_an_ok_sidecar() {
+        let mock = HealthMock::answering("{\"status\":\"ok\"}");
+        assert!(probe_health(&mock.url, Duration::from_millis(750)).is_ok());
+    }
+
+    #[test]
+    fn a_health_probe_rejects_a_not_ok_sidecar() {
+        // A sidecar that is up but reports it is not ready is not healthy —
+        // and "not ready" is the fail-closed direction to err toward.
+        let mock = HealthMock::answering("{\"status\":\"starting\",\"loaded\":[]}");
+        let detail = probe_health(&mock.url, Duration::from_millis(750)).unwrap_err();
+        assert!(detail.contains("not ready"), "detail: {detail}");
+    }
+
+    #[test]
+    fn a_health_probe_rejects_a_non_json_body() {
+        let mock = HealthMock::answering("<html>up</html>");
+        let detail = probe_health(&mock.url, Duration::from_millis(750)).unwrap_err();
+        assert!(detail.contains("not JSON"), "detail: {detail}");
+    }
+
+    #[test]
+    fn a_health_probe_rejects_a_listening_but_hung_sidecar() {
+        // The failure mode the old TCP connect probe could not see: the
+        // port is open, the server never answers, so "port open" meant
+        // nothing about readiness. The probe must time out into an error.
+        let mock = HealthMock::hung();
+        let detail = probe_health(&mock.url, Duration::from_millis(250)).unwrap_err();
+        assert!(detail.contains("could not reach"), "detail: {detail}");
+    }
+
+    #[test]
+    fn a_health_probe_demands_a_loopback_url() {
+        let detail = probe_health("http://example.com", Duration::from_millis(750)).unwrap_err();
+        assert!(detail.contains("loopback"), "detail: {detail}");
+    }
 
     fn predict_response(overrides: Value) -> String {
         // The guide's response shape: answers keyed by question id, each
@@ -476,9 +630,9 @@ mod tests {
                 !question["instructions"].as_str().unwrap().trim().is_empty(),
                 "question `{id}` has instructions"
             );
-            let criteria = question["criteria"].as_object().unwrap_or_else(|| {
-                panic!("question `{id}` must carry criteria keyed true/false")
-            });
+            let criteria = question["criteria"]
+                .as_object()
+                .unwrap_or_else(|| panic!("question `{id}` must carry criteria keyed true/false"));
             assert_eq!(criteria.len(), 2, "question `{id}` criteria keys");
             for key in ["true", "false"] {
                 assert!(
@@ -486,9 +640,9 @@ mod tests {
                     "question `{id}` criteria.{key} must be a non-empty description"
                 );
             }
-            let labels = question["labels"].as_object().unwrap_or_else(|| {
-                panic!("question `{id}` must carry the labels override")
-            });
+            let labels = question["labels"]
+                .as_object()
+                .unwrap_or_else(|| panic!("question `{id}` must carry the labels override"));
             assert_eq!(
                 labels.keys().collect::<Vec<_>>(),
                 vec!["false", "true"],
